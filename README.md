@@ -1,6 +1,11 @@
 # AI Memory — local-first, brain-inspired, MCP-pluggable
 
-See `architecture.md` for design. v0.2: real hybrid recall (sqlite-vec + FTS).
+v0.8 + OpenCode harness v2. See `architecture.md` for design.
+
+- Hybrid recall (sqlite-vec + FTS5 + importance + recency), `recall@3 = 1.0` on 8-case eval
+- Consolidation worker (rules + opt-in LLM), namespaces, export/import, backup retention
+- Safety net: `forget` soft-deletes into `trash` (30d restore), vacuum purges
+- OpenCode harness: project-scoped briefing, per-prompt recall, auto-capture on idle, `/remember /recall /forget /stats /consolidate`
 
 ## Quickstart (offline, hash embedder)
 
@@ -48,11 +53,27 @@ uv run ai-memory export -o backup.jsonl
 uv run ai-memory import -i backup.jsonl   # vectors recomputed with current embedder
 uv run ai-memory backup --keep 14         # timestamped copy, prune to newest 14
 uv run ai-memory restore --query "oops"   # undo a forget within 30 days
+uv run ai-memory forget --query "oops"    # soft-delete into trash (same as memory_forget)
+uv run ai-memory recall "what did we decide?" -k 5 --namespace myproject
 ```
 
 `forget` never hard-deletes: rows move to `trash` (immediately unrecallable),
-restorable for 30 days, then auto-purged by vacuum. A daily 02:00 cron runs
-`backup --keep 14` (see `crontab -l`).
+restorable for 30 days, then auto-purged by vacuum. Scheduled upkeep
+(see `crontab -l`): `backup --keep 14` daily 02:00, `ai-memory-consolidate`
+every 30min, `maintenance` Sundays 03:00.
+
+## OpenCode harness (plugin `ai-memory`)
+
+Global plugin at `~/.config/opencode/plugins/ai-memory` (auto-reloads on edit,
+trace at `/tmp/ai-memory-hook.log`):
+
+- First model call: project-scoped briefing (profile + decisions + procedures
+  for the project namespace derived from the working directory) plus usage rules.
+- Every prompt: task-relevant recall prepended (`[Relevant memory ns=...]`).
+- On `session.idle` / `session.compacted`: auto-store episode (90s debounce) +
+  throttled consolidate (1x per 10min per namespace).
+- Commands: `/remember <text>`, `/recall <query>`, `/forget <text>`,
+  `/stats`, `/consolidate`.
 
 Namespaces isolate projects (`AI_MEMORY_NS=work` or per-call `namespace=`); facts merge per-namespace, consolidation never leaks across, old DBs auto-migrate (`ns='default'`).
 
