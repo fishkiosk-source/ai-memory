@@ -52,6 +52,9 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("consolidate", help="distill unprocessed episodes")
     p.add_argument("--limit", type=int, default=50)
+    p.add_argument(
+        "--reprocess", action="store_true", help="re-extract already-processed episodes"
+    )
 
     p = sub.add_parser("recent", help="last N working-memory notes")
     p.add_argument("-n", "--limit", type=int, default=5)
@@ -91,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
     elif args.cmd == "consolidate":
-        print(m.consolidate(limit=args.limit))
+        print(m.consolidate(limit=args.limit, reprocess=args.reprocess))
     elif args.cmd == "recent":
         for r in m.recent(limit=args.limit, namespace=args.namespace):
             print(f"{r['ts']:.0f} [{r['session_id']}] {r['text']}")

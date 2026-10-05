@@ -27,7 +27,7 @@ try:
         namespace: str | None = None,
         session_id: str | None = None,
     ) -> str:
-        """Store an episode, fact, or procedure. Returns id."""
+        """Store an episode, fact, or procedure. Prefix text with 'proc: trigger -> steps' to force procedure capture. Returns id."""
         return mem.store(
             text,
             kind=kind,
@@ -62,10 +62,13 @@ try:
 
     @mcp.tool()
     def memory_consolidate(
-        limit: int = 50, vacuum: bool = False, llm: str | None = None
+        limit: int = 50,
+        vacuum: bool = False,
+        llm: str | None = None,
+        reprocess: bool = False,
     ) -> dict:
-        """Distill unprocessed episodes into facts/procedures. llm=ollama|openai enables the LLM hook."""
-        return mem.consolidate(limit, vacuum=vacuum, llm=llm)
+        """Distill episodes into facts/procedures. reprocess=true backfills after rule changes. llm=ollama|openai enables the LLM hook."""
+        return mem.consolidate(limit, vacuum=vacuum, llm=llm, reprocess=reprocess)
 
     @mcp.tool()
     def memory_vacuum(older_than_days: int = 90) -> int:

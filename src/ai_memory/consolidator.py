@@ -42,11 +42,57 @@ SHELL_SEQ_RE = re.compile(
     r"\brun\b\s+`?[\w./~$-][^\n]{4,140}?(?:&&|;|\bthen\b|\bfollowed by\b)[^\n]{4,200}",
     re.I,
 )
+# Explicit capture (v0.8.3): `proc: trigger -> steps` routes straight to
+# procedures. Checked first so /remember proc:... never depends on heuristics.
+PROC_EXPLICIT_RE = re.compile(
+    r"^\s*(?:proc|procedure)\s*:\s*(.+?)\s*->\s*(.+)",
+    re.I | re.S,
+)
+# Real session summaries rarely have numbered lists. They do have:
+# "Fixed X with/by/via Y", "Next: do A, B", "gotcha ... so run Y".
+FIX_WITH_RE = re.compile(
+    r"(?:fixed|resolved|patched|solved)\s+([^.\n]{8,200}?)\s+"
+    r"(?:with|by|via|using)\s+([^.\n]{8,300})",
+    re.I,
+)
+NEXT_RE = re.compile(
+    r"(?:next|todo|remaining|follow.?up)\s*:\s*(.{20,400})",
+    re.I | re.S,
+)
+GOTCHA_RE = re.compile(
+    r"(?:gotcha|learned|note|caution|warning)[^.:\n]*[:\-]?\s*"
+    r"([^.\n]{8,200}?)\s+so\s+"
+    r"(run|use|do|set|copy|install|avoid|never|always)\s+([^.\n]{8,300})",
+    re.I,
+)
+IMPERATIVE_SEQ_RE = re.compile(
+    r"\b(?:run|copy|install|clone|pull|push|restart|enable|start|kill|allow|export|uv\s+run|uv\s+sync)\b"
+    r"\s+[^,.\n]{3,80}"
+    r"(?:\s*,\s*(?:run|copy|install|clone|pull|push|restart|enable|start|kill|allow|export)\b"
+    r"\s+[^,.\n]{3,80}){1,}",
+    re.I,
+)
 
 
 def _slug(text: str, n: int = 6) -> str:
     words = re.sub(r"[^a-z0-9 ]", "", text.lower()).split()
     return "_".join(words[:n]) or "note"
+
+
+def _trigger_before(text: str, pos: int, fallback: str = "") -> str:
+    """Up to 80 chars before pos, expanded to word boundaries (<=120)."""
+    frag = text[max(0, pos - 80) : pos].strip()
+    start = pos - len(frag)
+    # crude re-anchor for stripped leading whitespace
+    start = max(
+        0, text.rfind(frag[:20], max(0, pos - 100), pos) if len(frag) >= 20 else start
+    )
+    if start > 0 and text[start - 1].isalnum() and frag[:1].isalnum():
+        frag = re.sub(r"^\S+\s*", "", frag)  # drop partial leading word
+    frag = frag.strip(" :-,")[:120].strip()
+    if len(frag) < 4:
+        return fallback or _slug(text).replace("_", " ")
+    return frag.strip(" :-,")
 
 
 def extract(text: str) -> dict:
@@ -75,24 +121,47 @@ def extract(text: str) -> dict:
     if FIX_RE.search(t):
         facts.append(("learnings", _slug(t), t[:280], 0.65))
 
+    if m := PROC_EXPLICIT_RE.search(t):
+        trig, steps = m.group(1).strip()[:120], m.group(2).strip()[:800]
+        if len(trig) > 1 and len(steps) > 1:
+            procs.append((trig, steps))
+            return {"facts": facts, "procedures": procs}
+
     if m := RUNBOOK_RE.search(t):
-        trigger = t[: m.start()].strip()[-80:] or _slug(t).replace("_", " ")
+        trigger = _trigger_before(t, m.start(), _slug(t).replace("_", " "))
         procs.append((trigger, m.group(1).strip()))
     if not procs:
         m = NUMBERED_LIST_RE.search(t)
         if m:
-            trigger = t[: m.start()].strip()[-80:] or _slug(t).replace("_", " ")
-            procs.append((trigger or "numbered steps", m.group(0).strip()[:400]))
+            trigger = _trigger_before(t, m.start(), "numbered steps")
+            procs.append((trigger, m.group(0).strip()[:400]))
         elif m := FIRST_THEN_RE.search(t):
-            trigger = t[: m.start()].strip()[-80:] or _slug(t).replace("_", " ")
-            procs.append((trigger or "first-then chain", m.group(0).strip()[:400]))
+            trigger = _trigger_before(t, m.start(), "first-then chain")
+            procs.append((trigger, m.group(0).strip()[:400]))
         elif m := HOWTO_RE.search(t):
             procs.append(
                 (f"how to {m.group(1).strip()}"[:120], m.group(2).strip()[:400])
             )
-        elif m := SHELL_SEQ_RE.search(t):
-            trigger = t[: m.start()].strip()[-80:] or _slug(t).replace("_", " ")
-            procs.append((trigger or "shell sequence", m.group(0).strip()[:400]))
+    if not procs and (m := FIX_WITH_RE.search(t)):
+        trigger = f"fix {m.group(1).strip()}"[:120]
+        procs.append((trigger, m.group(2).strip()[:400]))
+    if not procs and (m := GOTCHA_RE.search(t)):
+        trigger = f"{m.group(1).strip()}"[:120]
+        procs.append((trigger, f"{m.group(2)} {m.group(3)}".strip()[:400]))
+    if not procs and (m := NEXT_RE.search(t)):
+        steps = m.group(1).strip()[:400]
+        trigger = _trigger_before(t, m.start(), "")
+        if len(trigger) < 4 or trigger == "next steps":
+            # bare "Next:" with no useful prefix: key on the steps themselves
+            # so distinct follow-ups don't collapse into one deduped row.
+            trigger = f"next: {steps[:60]}".strip()
+        procs.append((trigger[:120], steps))
+    if not procs and (m := IMPERATIVE_SEQ_RE.search(t)):
+        trigger = _trigger_before(t, m.start(), "command sequence")
+        procs.append((trigger, m.group(0).strip()[:400]))
+    if not procs and (m := SHELL_SEQ_RE.search(t)):
+        trigger = _trigger_before(t, m.start(), "shell sequence")
+        procs.append((trigger, m.group(0).strip()[:400]))
     return {"facts": facts, "procedures": procs}
 
 
@@ -105,6 +174,7 @@ def run_once(
     vacuum: bool = False,
     llm: str | None = None,
     max_llm: int = 20,
+    reprocess: bool = False,
 ) -> dict:
     import os as _os
     from . import store as S
@@ -113,9 +183,14 @@ def run_once(
     llm_on = provider not in (None, "", "off", "false", "0")
     llm_calls, llm_facts = 0, 0
 
-    rows = con.execute(
-        "SELECT * FROM episodes WHERE processed=0 ORDER BY ts LIMIT ?", (limit,)
-    ).fetchall()
+    if reprocess:
+        rows = con.execute(
+            "SELECT * FROM episodes ORDER BY ts LIMIT ?", (limit,)
+        ).fetchall()
+    else:
+        rows = con.execute(
+            "SELECT * FROM episodes WHERE processed=0 ORDER BY ts LIMIT ?", (limit,)
+        ).fetchall()
     facts_made, procs_made, processed = 0, 0, 0
     for r in rows:
         processed += 1
@@ -159,6 +234,7 @@ def run_once(
         "procedures_made": procs_made,
         "llm_calls": llm_calls,
         "llm_facts": llm_facts,
+        "reprocessed": bool(reprocess),
     }
     if vacuum:
         res["vacuumed"] = vacuum_old(con)

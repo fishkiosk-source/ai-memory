@@ -45,6 +45,9 @@ uv run ai-memory-consolidate --loop --interval 300 --vacuum   # daemon
 ```
 
 Distills unprocessed episodes → facts (`user.*`, `decisions.*`, `learnings.*`) + procedures, merges same-key updates, decays trivia, vacuums old junk (FTS + vec index kept consistent).
+Procedures mine `Fixed X with Y`, `Next:/Remaining:` follow-ups, `gotcha ... so run Y`,
+and explicit `proc: trigger -> steps` (also routable via `store(kind=procedure)`).
+`--reprocess` re-extracts already-processed episodes after rule changes.
 
 ## Portability + namespaces
 
@@ -72,8 +75,9 @@ trace at `/tmp/ai-memory-hook.log`):
 - Every prompt: task-relevant recall prepended (`[Relevant memory ns=...]`).
 - On `session.idle` / `session.compacted`: auto-store episode (90s debounce) +
   throttled consolidate (1x per 10min per namespace).
-- Commands: `/remember <text>`, `/recall <query>`, `/forget <text>`,
-  `/stats`, `/consolidate`.
+- Commands: `/remember <text>` (`proc: trigger -> steps` forces procedure
+  capture), `/recall <query>`, `/forget <text>`,
+  `/stats`, `/consolidate --reprocess` (backfill after rule changes).
 
 Namespaces isolate projects (`AI_MEMORY_NS=work` or per-call `namespace=`); facts merge per-namespace, consolidation never leaks across, old DBs auto-migrate (`ns='default'`).
 

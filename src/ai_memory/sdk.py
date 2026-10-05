@@ -85,6 +85,22 @@ class Memory:
         session_id: str | None = None,
     ) -> str:
         ns = namespace or self.namespace
+        if kind == "episode":
+            import re as _re
+
+            pm = _re.match(
+                r"\s*(?:proc|procedure)\s*:\s*(.+?)\s*->\s*(.+)",
+                text,
+                _re.S,
+            )
+            if pm and len(pm.group(1).strip()) > 1 and len(pm.group(2).strip()) > 1:
+                return S.store_procedure(
+                    self.con,
+                    trigger=pm.group(1).strip()[:120],
+                    steps=pm.group(2).strip()[:800],
+                    namespace=ns,
+                    vec=self._vec(f"{pm.group(1)} {pm.group(2)}"),
+                )
         if kind == "fact":
             return S.store_fact(
                 self.con,
@@ -278,9 +294,17 @@ class Memory:
         vacuum: bool = False,
         llm: str | None = None,
         max_llm: int = 20,
+        reprocess: bool = False,
     ) -> dict:
         with self._lock:
-            out = C.run_once(self.con, limit, vacuum=vacuum, llm=llm, max_llm=max_llm)
+            out = C.run_once(
+                self.con,
+                limit,
+                vacuum=vacuum,
+                llm=llm,
+                max_llm=max_llm,
+                reprocess=reprocess,
+            )
         # embed newly created facts/procedures so vec index stays warm
         try:
             rows = self.con.execute(
