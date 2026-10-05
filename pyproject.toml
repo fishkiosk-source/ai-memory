@@ -1,6 +1,6 @@
 [project]
 name = "ai-memory"
-version = "0.8.0"
+version = "0.8.1"
 description = "Human-brain-inspired local-first AI memory, MCP-pluggable"
 readme = "README.md"
 requires-python = ">=3.10"

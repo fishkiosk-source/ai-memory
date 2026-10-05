@@ -1,4 +1,5 @@
 """SQLite schema + FTS5 + sqlite-vec (optional/best-effort)."""
+
 from __future__ import annotations
 import sqlite3
 
@@ -21,7 +22,7 @@ CREATE INDEX IF NOT EXISTS idx_ep_ts ON episodes(ts);
 CREATE INDEX IF NOT EXISTS idx_facts_ent ON facts(entity, key);
 """
 
-VEC_TABLES = ("vec_episodes", "vec_facts")
+VEC_TABLES = ("vec_episodes", "vec_facts", "vec_procedures")
 
 # sqlite3.Connection is a C type without __dict__ — track vec state here.
 _STATE: dict[int, dict] = {}
@@ -62,6 +63,9 @@ def connect(db_path: str, dim: int = 384) -> sqlite3.Connection:
         con.execute(
             f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_facts USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[{dim}])"
         )
+        con.execute(
+            f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_procedures USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[{dim}])"
+        )
         _STATE[id(con)]["has_vec"] = True
     except Exception:
         pass
@@ -76,7 +80,9 @@ def vec_dim(con: sqlite3.Connection) -> int:
     return int(_STATE.get(id(con), {}).get("dim", 384))
 
 
-def vec_insert(con: sqlite3.Connection, table: str, ref_id: str, vec: list[float] | None) -> None:
+def vec_insert(
+    con: sqlite3.Connection, table: str, ref_id: str, vec: list[float] | None
+) -> None:
     if vec is None or not has_vec(con):
         return
     if table not in VEC_TABLES:
@@ -86,8 +92,10 @@ def vec_insert(con: sqlite3.Connection, table: str, ref_id: str, vec: list[float
     try:
         from sqlite_vec import serialize_float32  # type: ignore
 
-        con.execute(f"INSERT OR REPLACE INTO {table}(id, embedding) VALUES(?, ?)",
-                    (ref_id, serialize_float32(vec)))
+        con.execute(
+            f"INSERT OR REPLACE INTO {table}(id, embedding) VALUES(?, ?)",
+            (ref_id, serialize_float32(vec)),
+        )
     except Exception:
         pass
 
@@ -101,8 +109,9 @@ def vec_delete(con: sqlite3.Connection, table: str, ref_id: str) -> None:
         pass
 
 
-def vec_search(con: sqlite3.Connection, table: str, qvec: list[float],
-               limit: int = 50) -> list[tuple[str, float]]:
+def vec_search(
+    con: sqlite3.Connection, table: str, qvec: list[float], limit: int = 50
+) -> list[tuple[str, float]]:
     """Return [(id, distance)] ordered by cosine distance asc. Empty if vec unavailable."""
     if not has_vec(con) or qvec is None or len(qvec) != vec_dim(con):
         return []

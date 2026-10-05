@@ -1,4 +1,5 @@
 """Portability: JSONL export/import (vectors recomputed) + file backup."""
+
 from __future__ import annotations
 import json
 import os
@@ -13,17 +14,25 @@ TABLES = ("episodes", "facts", "procedures")
 def export_db(con: sqlite3.Connection, path: str) -> dict:
     counts = {}
     with open(path, "w") as f:
-        f.write(json.dumps({"format": FORMAT, "version": VERSION,
-                            "exported_at": time.time()}) + "\n")
+        f.write(
+            json.dumps(
+                {"format": FORMAT, "version": VERSION, "exported_at": time.time()}
+            )
+            + "\n"
+        )
         for tbl in TABLES:
             try:
-                cols = [r["name"] for r in con.execute(f"PRAGMA table_info({tbl})").fetchall()]
+                cols = [
+                    r["name"]
+                    for r in con.execute(f"PRAGMA table_info({tbl})").fetchall()
+                ]
             except Exception:
                 continue
             n = 0
             for r in con.execute(f"SELECT * FROM {tbl}").fetchall():
-                f.write(json.dumps({"table": tbl,
-                                    "row": {c: r[c] for c in cols}}) + "\n")
+                f.write(
+                    json.dumps({"table": tbl, "row": {c: r[c] for c in cols}}) + "\n"
+                )
                 n += 1
             counts[tbl] = n
     return {"path": path, "bytes": os.path.getsize(path), **counts}
@@ -46,20 +55,37 @@ def import_db(con: sqlite3.Connection, path: str, embed_fn=None) -> dict:
                 continue
             cols = ", ".join(row.keys())
             qs = ", ".join("?" for _ in row)
-            con.execute(f"INSERT OR REPLACE INTO {tbl}({cols}) VALUES({qs})",
-                        tuple(row.values()))
+            con.execute(
+                f"INSERT OR REPLACE INTO {tbl}({cols}) VALUES({qs})",
+                tuple(row.values()),
+            )
             if tbl == "episodes":
-                con.execute("INSERT OR REPLACE INTO episodes_fts(id,text) VALUES(?,?)",
-                            (row["id"], row["text"]))
+                con.execute(
+                    "INSERT OR REPLACE INTO episodes_fts(id,text) VALUES(?,?)",
+                    (row["id"], row["text"]),
+                )
                 if embed_fn:
                     vec_insert(con, "vec_episodes", row["id"], embed_fn(row["text"]))
             elif tbl == "facts":
                 con.execute(
                     "INSERT OR REPLACE INTO facts_fts(id,entity,key,value) VALUES(?,?,?,?)",
-                    (row["id"], row["entity"], row["key"], row["value"]))
+                    (row["id"], row["entity"], row["key"], row["value"]),
+                )
                 if embed_fn:
-                    vec_insert(con, "vec_facts", row["id"],
-                               embed_fn(f"{row['entity']} {row['key']} {row['value']}"))
+                    vec_insert(
+                        con,
+                        "vec_facts",
+                        row["id"],
+                        embed_fn(f"{row['entity']} {row['key']} {row['value']}"),
+                    )
+            elif tbl == "procedures":
+                if embed_fn:
+                    vec_insert(
+                        con,
+                        "vec_procedures",
+                        row["id"],
+                        embed_fn(f"{row.get('trigger', '')} {row.get('steps', '')}"),
+                    )
             counts[tbl] += 1
     con.commit()
     return {"path": path, **counts}
@@ -67,7 +93,9 @@ def import_db(con: sqlite3.Connection, path: str, embed_fn=None) -> dict:
 
 def backup_db(db_path: str, dest: str | None = None, keep: int | None = None) -> str:
     if dest is None:
-        stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time()*1e6) % 1000000:06d}"
+        stamp = (
+            time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1e6) % 1000000:06d}"
+        )
         dest = f"{db_path}.{stamp}.bak"
     src = sqlite3.connect(db_path)
     try:

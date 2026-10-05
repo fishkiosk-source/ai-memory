@@ -5,6 +5,7 @@ Final per architecture.md:
   vec_sim = 1 - cosine_distance (sqlite-vec), clipped to [0,1]
   fts_norm = 1/(1+rank) over FTS hit order; 0 when no FTS hit
 """
+
 from __future__ import annotations
 import json
 import math
@@ -22,10 +23,44 @@ def _recency(ts: float, lam: float = 0.01) -> float:
     return math.exp(-lam * age_days)
 
 
-STOP = {"what", "does", "user", "like", "likes", "the", "a", "an", "is", "are",
-        "do", "how", "why", "when", "where", "which", "who", "whom", "can",
-        "could", "would", "should", "my", "your", "their", "them", "they",
-        "our", "with", "for", "and", "all", "we", "you", "that", "this"}
+STOP = {
+    "what",
+    "does",
+    "user",
+    "like",
+    "likes",
+    "the",
+    "a",
+    "an",
+    "is",
+    "are",
+    "do",
+    "how",
+    "why",
+    "when",
+    "where",
+    "which",
+    "who",
+    "whom",
+    "can",
+    "could",
+    "would",
+    "should",
+    "my",
+    "your",
+    "their",
+    "them",
+    "they",
+    "our",
+    "with",
+    "for",
+    "and",
+    "all",
+    "we",
+    "you",
+    "that",
+    "this",
+}
 
 
 def _sanitize_match(query: str) -> str | None:
@@ -39,9 +74,13 @@ def _sanitize_match(query: str) -> str | None:
     return " OR ".join(toks)
 
 
-def recall(con: sqlite3.Connection, query: str, k: int = 5,
-           qvec: list[float] | None = None,
-           namespace: str | None = None) -> list[RecallHit]:
+def recall(
+    con: sqlite3.Connection,
+    query: str,
+    k: int = 5,
+    qvec: list[float] | None = None,
+    namespace: str | None = None,
+) -> list[RecallHit]:
     fts_rank: dict[tuple[str, str], float] = {}  # (store, id) -> fts_norm
     vec_sim: dict[tuple[str, str], float] = {}
 
@@ -62,18 +101,24 @@ def recall(con: sqlite3.Connection, query: str, k: int = 5,
         like = f"%{query}%"
         try:
             for r in con.execute(
-                "SELECT id FROM episodes WHERE text LIKE ? LIMIT 20", (like,)).fetchall():
+                "SELECT id FROM episodes WHERE text LIKE ? LIMIT 20", (like,)
+            ).fetchall():
                 fts_rank.setdefault(("episode", r["id"]), 0.4)
             for r in con.execute(
                 "SELECT id FROM facts WHERE entity LIKE ? OR key LIKE ? OR value LIKE ? LIMIT 20",
-                (like, like, like)).fetchall():
+                (like, like, like),
+            ).fetchall():
                 fts_rank.setdefault(("fact", r["id"]), 0.4)
         except Exception:
             pass
 
     # 2. vector candidates via sqlite-vec (true cosine distance, not brute force)
     if qvec is not None:
-        for tbl, store in (("vec_episodes", "episode"), ("vec_facts", "fact")):
+        for tbl, store in (
+            ("vec_episodes", "episode"),
+            ("vec_facts", "fact"),
+            ("vec_procedures", "procedure"),
+        ):
             for ref_id, dist in vec_search(con, tbl, qvec, limit=50):
                 sim = max(0.0, min(1.0, 1.0 - dist))
                 if sim > 0.05:
@@ -82,7 +127,7 @@ def recall(con: sqlite3.Connection, query: str, k: int = 5,
 
     # 3. procedures by trigger tokens (full-phrase LIKE misses paraphrases)
     try:
-        toks = [t.strip('?.,!"\'').lower() for t in query.split()]
+        toks = [t.strip("?.,!\"'").lower() for t in query.split()]
         toks = [t for t in toks if len(t) > 3][:6]
         seen: set[str] = set()
         for tok in toks:
@@ -99,7 +144,8 @@ def recall(con: sqlite3.Connection, query: str, k: int = 5,
                     overlap = sum(1 for t in toks if t in (r["trigger"] or "").lower())
                     fts_rank[("procedure", r["id"])] = max(
                         fts_rank.get(("procedure", r["id"]), 0.0),
-                        min(0.8, 0.4 + 0.15 * overlap))
+                        min(0.8, 0.4 + 0.15 * overlap),
+                    )
     except Exception:
         pass
 
@@ -111,9 +157,12 @@ def recall(con: sqlite3.Connection, query: str, k: int = 5,
         if row is None:
             continue
         text, ts, imp, meta = row
-        score = (W_VEC * vec_sim.get((store, ref_id), 0.0)
-                 + W_FTS * fts_rank.get((store, ref_id), 0.0)
-                 + W_IMP * imp + W_REC * _recency(ts))
+        score = (
+            W_VEC * vec_sim.get((store, ref_id), 0.0)
+            + W_FTS * fts_rank.get((store, ref_id), 0.0)
+            + W_IMP * imp
+            + W_REC * _recency(ts)
+        )
         hits.append(RecallHit(ref_id, store, text, round(score, 4), ts, meta))
     hits.sort(key=lambda h: h.score, reverse=True)
     return hits[:k]
@@ -125,14 +174,19 @@ def _ns_ok(row_ns: str | None, namespace: str | None) -> bool:
     return (row_ns or "default") == namespace
 
 
-def _fetch(con: sqlite3.Connection, store: str, ref_id: str,
-           namespace: str | None = None):
+def _fetch(
+    con: sqlite3.Connection, store: str, ref_id: str, namespace: str | None = None
+):
     if store == "episode":
         r = con.execute("SELECT * FROM episodes WHERE id=?", (ref_id,)).fetchone()
         if not r or not _ns_ok(r["ns"] if "ns" in r.keys() else None, namespace):
             return None
-        return (r["text"], r["ts"], float(r["importance"] or 0),
-                {"actor": r["actor"], "harness": r["harness"]})
+        return (
+            r["text"],
+            r["ts"],
+            float(r["importance"] or 0),
+            {"actor": r["actor"], "harness": r["harness"]},
+        )
     if store == "fact":
         r = con.execute("SELECT * FROM facts WHERE id=?", (ref_id,)).fetchone()
         if not r or not _ns_ok(r["ns"] if "ns" in r.keys() else None, namespace):
@@ -141,9 +195,40 @@ def _fetch(con: sqlite3.Connection, store: str, ref_id: str,
             src = json.loads(r["source_episodes"] or "[]")
         except Exception:
             src = []
-        return (f"{r['entity']}.{r['key']} = {r['value']}", r["updated"],
-                float(r["importance"] or 0), {"entity": r["entity"], "sources": src})
+        return (
+            f"{r['entity']}.{r['key']} = {r['value']}",
+            r["updated"],
+            float(r["importance"] or 0),
+            {"entity": r["entity"], "sources": src},
+        )
     r = con.execute("SELECT * FROM procedures WHERE id=?", (ref_id,)).fetchone()
     if not r or not _ns_ok(r["ns"] if "ns" in r.keys() else None, namespace):
         return None
-    return (f"{r['trigger']} → {r['steps']}", r["updated"], 0.5, {})
+    try:
+        uses = int(r["uses"] or 1)
+    except Exception:
+        uses = 1
+    boost = min(0.2, 0.02 * max(0, uses - 1))
+    return (f"{r['trigger']} → {r['steps']}", r["updated"], 0.5 + boost, {"uses": uses})
+
+
+def recent_working(
+    con: sqlite3.Connection, namespace: str | None = None, limit: int = 5
+) -> list[dict]:
+    q = "SELECT session_id, ts, role, text, ns FROM working"
+    args: tuple = ()
+    if namespace is not None:
+        q += " WHERE ns=?"
+        args = (namespace,)
+    q += " ORDER BY ts DESC LIMIT ?"
+    rows = con.execute(q, (*args, int(limit))).fetchall()
+    return [
+        {
+            "session_id": r["session_id"],
+            "ts": r["ts"],
+            "role": r["role"],
+            "text": r["text"],
+            "ns": r["ns"] if "ns" in r.keys() else "default",
+        }
+        for r in rows
+    ]

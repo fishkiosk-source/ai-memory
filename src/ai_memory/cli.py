@@ -1,4 +1,5 @@
 """`ai-memory` CLI: export / import / backup / stats."""
+
 from __future__ import annotations
 import argparse
 import os
@@ -23,8 +24,9 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("backup", help="timestamped copy of memory.db")
     p.add_argument("--dest", default=None)
-    p.add_argument("--keep", type=int, default=None,
-                   help="retain newest N .bak files, prune rest")
+    p.add_argument(
+        "--keep", type=int, default=None, help="retain newest N .bak files, prune rest"
+    )
 
     p = sub.add_parser("restore", help="restore trashed rows by id or text")
     p.add_argument("--ref-id", default=None)
@@ -51,6 +53,10 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("consolidate", help="distill unprocessed episodes")
     p.add_argument("--limit", type=int, default=50)
 
+    p = sub.add_parser("recent", help="last N working-memory notes")
+    p.add_argument("-n", "--limit", type=int, default=5)
+    p.add_argument("--namespace", default=None)
+
     sub.add_parser("stats", help="print counts")
 
     args = ap.parse_args(argv)
@@ -71,10 +77,21 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "forget":
         print(m.forget(ref_id=args.ref_id, query=args.query))
     elif args.cmd == "store":
-        print(m.store(args.text, kind=args.kind, entity=args.entity,
-                      key=args.key, harness="cli", namespace=args.namespace))
+        print(
+            m.store(
+                args.text,
+                kind=args.kind,
+                entity=args.entity,
+                key=args.key,
+                harness="cli",
+                namespace=args.namespace,
+            )
+        )
     elif args.cmd == "consolidate":
         print(m.consolidate(limit=args.limit))
+    elif args.cmd == "recent":
+        for r in m.recent(limit=args.limit, namespace=args.namespace):
+            print(f"{r['ts']:.0f} [{r['session_id']}] {r['text']}")
     elif args.cmd == "stats":
         print(m.stats())
     return 0

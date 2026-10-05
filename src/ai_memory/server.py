@@ -1,4 +1,5 @@
 """MCP server: stdio (local) or streamable HTTP (LAN) with Bearer token auth."""
+
 from __future__ import annotations
 import argparse
 import json
@@ -17,18 +18,37 @@ try:
     mcp = FastMCP("ai-memory")
 
     @mcp.tool()
-    def memory_store(text: str, kind: str = "episode", entity: str = "user",
-                     key: str = "note", importance: float | None = None,
-                     namespace: str | None = None) -> str:
+    def memory_store(
+        text: str,
+        kind: str = "episode",
+        entity: str = "user",
+        key: str = "note",
+        importance: float | None = None,
+        namespace: str | None = None,
+        session_id: str | None = None,
+    ) -> str:
         """Store an episode, fact, or procedure. Returns id."""
-        return mem.store(text, kind=kind, entity=entity, key=key,
-                         importance=importance, namespace=namespace)
+        return mem.store(
+            text,
+            kind=kind,
+            entity=entity,
+            key=key,
+            importance=importance,
+            namespace=namespace,
+            session_id=session_id,
+        )
 
     @mcp.tool()
-    def memory_recall(query: str, k: int = 5,
-                      namespace: str | None = None) -> list[dict]:
+    def memory_recall(
+        query: str, k: int = 5, namespace: str | None = None
+    ) -> list[dict]:
         """Hybrid recall (sqlite-vec cosine + FTS + importance + recency)."""
         return mem.recall(query, k, namespace=namespace)
+
+    @mcp.tool()
+    def memory_recent(limit: int = 5, namespace: str | None = None) -> list[dict]:
+        """Last N working-memory notes for the namespace (session context)."""
+        return mem.recent(limit, namespace=namespace)
 
     @mcp.tool()
     def memory_forget(ref_id: str | None = None, query: str | None = None) -> int:
@@ -41,8 +61,9 @@ try:
         return mem.restore(ref_id, query)
 
     @mcp.tool()
-    def memory_consolidate(limit: int = 50, vacuum: bool = False,
-                           llm: str | None = None) -> dict:
+    def memory_consolidate(
+        limit: int = 50, vacuum: bool = False, llm: str | None = None
+    ) -> dict:
         """Distill unprocessed episodes into facts/procedures. llm=ollama|openai enables the LLM hook."""
         return mem.consolidate(limit, vacuum=vacuum, llm=llm)
 
@@ -89,9 +110,16 @@ class BearerAuthMiddleware:
         if secrets.compare_digest(got, f"Bearer {self.token}"):
             return await self.app(scope, receive, send)
         body = json.dumps({"error": "unauthorized"}).encode()
-        await send({"type": "http.response.start", "status": 401,
-                    "headers": [(b"content-type", b"application/json"),
-                                (b"content-length", str(len(body)).encode())]})
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode()),
+                ],
+            }
+        )
         await send({"type": "http.response.body", "body": body})
 
 
@@ -101,17 +129,26 @@ def _is_loopback(host: str) -> bool:
 
 def main(argv: list[str] | None = None):
     if mcp is None:
-        raise SystemExit("fastmcp not installed. Run: uv sync  (core SDK works without it)")
+        raise SystemExit(
+            "fastmcp not installed. Run: uv sync  (core SDK works without it)"
+        )
     ap = argparse.ArgumentParser(description="AI memory MCP server")
-    ap.add_argument("--transport", default=os.environ.get("AI_MEMORY_TRANSPORT", "stdio"),
-                    choices=["stdio", "http"])
+    ap.add_argument(
+        "--transport",
+        default=os.environ.get("AI_MEMORY_TRANSPORT", "stdio"),
+        choices=["stdio", "http"],
+    )
     ap.add_argument("--host", default=os.environ.get("AI_MEMORY_HOST", "127.0.0.1"))
-    ap.add_argument("--port", type=int,
-                    default=int(os.environ.get("AI_MEMORY_PORT", "8000")))
+    ap.add_argument(
+        "--port", type=int, default=int(os.environ.get("AI_MEMORY_PORT", "8000"))
+    )
     ap.add_argument("--path", default=os.environ.get("AI_MEMORY_PATH", "/mcp"))
     ap.add_argument("--token", default=os.environ.get("AI_MEMORY_TOKEN"))
-    ap.add_argument("--no-auth", action="store_true",
-                    help="allow unauthenticated HTTP (loopback only)")
+    ap.add_argument(
+        "--no-auth",
+        action="store_true",
+        help="allow unauthenticated HTTP (loopback only)",
+    )
     args = ap.parse_args(argv)
 
     if args.transport == "stdio":
@@ -124,9 +161,17 @@ def main(argv: list[str] | None = None):
 
         middleware = [Middleware(BearerAuthMiddleware, token=args.token)]
     elif not args.no_auth and not _is_loopback(args.host):
-        raise SystemExit("refusing to serve LAN without a token: set --token or AI_MEMORY_TOKEN")
-    mcp.run(transport="http", host=args.host, port=args.port, path=args.path,
-            middleware=middleware or None, show_banner=False)
+        raise SystemExit(
+            "refusing to serve LAN without a token: set --token or AI_MEMORY_TOKEN"
+        )
+    mcp.run(
+        transport="http",
+        host=args.host,
+        port=args.port,
+        path=args.path,
+        middleware=middleware or None,
+        show_banner=False,
+    )
 
 
 def serve_main(argv: list[str] | None = None):

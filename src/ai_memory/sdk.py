@@ -1,4 +1,5 @@
 """Thin in-process SDK — same API as MCP tools."""
+
 from __future__ import annotations
 import json
 import sqlite3
@@ -11,8 +12,13 @@ from . import store as S, recall as R, consolidator as C
 
 
 class Memory:
-    def __init__(self, db_path: str | None = None, embed_provider: str = "hash",
-                 dim: int = DIM_DEFAULT, namespace: str | None = None):
+    def __init__(
+        self,
+        db_path: str | None = None,
+        embed_provider: str = "hash",
+        dim: int = DIM_DEFAULT,
+        namespace: str | None = None,
+    ):
         cfg = Config()
         self.db_path = db_path or cfg.db_path
         self.dim = dim
@@ -41,34 +47,106 @@ class Memory:
             return None
 
     # --- tools (mirror MCP) ---
-    def store(self, text: str, kind: str = "episode", actor: str = "user",
-              harness: str = "opencode", entity: str = "user",
-              key: str = "note", importance: float | None = None,
-              namespace: str | None = None) -> str:
+    def store(
+        self,
+        text: str,
+        kind: str = "episode",
+        actor: str = "user",
+        harness: str = "opencode",
+        entity: str = "user",
+        key: str = "note",
+        importance: float | None = None,
+        namespace: str | None = None,
+        session_id: str | None = None,
+    ) -> str:
         with self._lock:
-            return self._store(text, kind, actor, harness, entity, key,
-                               importance, namespace)
+            return self._store(
+                text,
+                kind,
+                actor,
+                harness,
+                entity,
+                key,
+                importance,
+                namespace,
+                session_id,
+            )
 
-    def _store(self, text: str, kind: str = "episode", actor: str = "user",
-               harness: str = "opencode", entity: str = "user",
-               key: str = "note", importance: float | None = None,
-               namespace: str | None = None) -> str:
+    def _store(
+        self,
+        text: str,
+        kind: str = "episode",
+        actor: str = "user",
+        harness: str = "opencode",
+        entity: str = "user",
+        key: str = "note",
+        importance: float | None = None,
+        namespace: str | None = None,
+        session_id: str | None = None,
+    ) -> str:
         ns = namespace or self.namespace
         if kind == "fact":
-            return S.store_fact(self.con, entity, key, text, importance=importance,
-                                vec=self._vec(f"{entity} {key} {text}"), namespace=ns)
+            return S.store_fact(
+                self.con,
+                entity,
+                key,
+                text,
+                importance=importance,
+                vec=self._vec(f"{entity} {key} {text}"),
+                namespace=ns,
+            )
         if kind == "procedure":
-            return S.store_procedure(self.con, trigger=key, steps=text, namespace=ns)
-        S.push_working(self.con, "default", actor, text, namespace=ns)
-        return S.store_episode(self.con, text, actor, harness, importance,
-                               vec=self._vec(text), namespace=ns)
+            return S.store_procedure(
+                self.con,
+                trigger=key,
+                steps=text,
+                namespace=ns,
+                vec=self._vec(f"{key} {text}"),
+            )
+        sess = session_id or ns
+        S.push_working(self.con, sess, actor, text, namespace=ns)
+        return S.store_episode(
+            self.con,
+            text,
+            actor,
+            harness,
+            importance,
+            vec=self._vec(text),
+            namespace=ns,
+        )
 
-    def recall(self, query: str, k: int = 5,
-               namespace: str | None = None) -> list[dict]:
+    def recall(
+        self, query: str, k: int = 5, namespace: str | None = None
+    ) -> list[dict]:
         with self._lock:
             ns = namespace or self.namespace
             hits = R.recall(self.con, query, k, qvec=self._vec(query), namespace=ns)
-            return [h.__dict__ for h in hits]
+            out = [h.__dict__ for h in hits]
+            try:  # learning loop: reinforce what was useful
+                for h in hits:
+                    if h.store == "episode":
+                        self.con.execute(
+                            "UPDATE episodes SET importance=min(1.0, COALESCE(importance,0.5)+0.05) WHERE id=?",
+                            (h.ref_id,),
+                        )
+                    elif h.store == "fact":
+                        self.con.execute(
+                            "UPDATE facts SET importance=min(1.0, COALESCE(importance,0.5)+0.05) WHERE id=?",
+                            (h.ref_id,),
+                        )
+                    elif h.store == "procedure":
+                        self.con.execute(
+                            "UPDATE procedures SET uses=COALESCE(uses,1)+1 WHERE id=?",
+                            (h.ref_id,),
+                        )
+                self.con.commit()
+            except Exception:
+                pass
+            return out
+
+    def recent(self, limit: int = 5, namespace: str | None = None) -> list[dict]:
+        with self._lock:
+            return R.recent_working(self.con, namespace or self.namespace, limit=limit)
 
     def forget(self, ref_id: str | None = None, query: str | None = None) -> int:
         """Soft-delete into trash (30d grace, see restore/vacuum)."""
@@ -82,17 +160,31 @@ class Memory:
         ids = [ref_id] if ref_id else []
         if query:
             like = f"%{query}%"
-            ids += [r[0] for r in self.con.execute(
-                "SELECT id FROM episodes WHERE text LIKE ?", (like,)).fetchall()]
-            ids += [r[0] for r in self.con.execute(
-                "SELECT id FROM facts WHERE entity LIKE ? OR key LIKE ? OR value LIKE ?",
-                (like, like, like)).fetchall()]
-            ids += [r[0] for r in self.con.execute(
-                "SELECT id FROM procedures WHERE trigger LIKE ? OR steps LIKE ?",
-                (like, like)).fetchall()]
+            ids += [
+                r[0]
+                for r in self.con.execute(
+                    "SELECT id FROM episodes WHERE text LIKE ?", (like,)
+                ).fetchall()
+            ]
+            ids += [
+                r[0]
+                for r in self.con.execute(
+                    "SELECT id FROM facts WHERE entity LIKE ? OR key LIKE ? OR value LIKE ?",
+                    (like, like, like),
+                ).fetchall()
+            ]
+            ids += [
+                r[0]
+                for r in self.con.execute(
+                    "SELECT id FROM procedures WHERE trigger LIKE ? OR steps LIKE ?",
+                    (like, like),
+                ).fetchall()
+            ]
         for eid in ids:
             for tbl in ("episodes", "facts", "procedures"):
-                row = self.con.execute(f"SELECT * FROM {tbl} WHERE id=?", (eid,)).fetchone()
+                row = self.con.execute(
+                    f"SELECT * FROM {tbl} WHERE id=?", (eid,)
+                ).fetchone()
                 if row:
                     T.stash(self.con, tbl, row)
                     self.con.execute(f"DELETE FROM {tbl} WHERE id=?", (eid,))
@@ -101,6 +193,7 @@ class Memory:
             self.con.execute("DELETE FROM facts_fts WHERE id=?", (eid,))
             vec_delete(self.con, "vec_episodes", eid)
             vec_delete(self.con, "vec_facts", eid)
+            vec_delete(self.con, "vec_procedures", eid)
         self.con.commit()
         return n
 
@@ -116,41 +209,88 @@ class Memory:
                 row = json.loads(t["row"])
                 cols = ", ".join(row.keys())
                 qs = ", ".join("?" for _ in row)
-                self.con.execute(f"INSERT OR REPLACE INTO {t['tbl']}({cols}) VALUES({qs})",
-                                 tuple(row.values()))
+                self.con.execute(
+                    f"INSERT OR REPLACE INTO {t['tbl']}({cols}) VALUES({qs})",
+                    tuple(row.values()),
+                )
                 if t["tbl"] == "episodes":
-                    self.con.execute("INSERT OR REPLACE INTO episodes_fts(id,text) VALUES(?,?)",
-                                     (row["id"], row["text"]))
-                    vec_insert(self.con, "vec_episodes", row["id"], self._vec(row["text"]))
+                    self.con.execute(
+                        "INSERT OR REPLACE INTO episodes_fts(id,text) VALUES(?,?)",
+                        (row["id"], row["text"]),
+                    )
+                    vec_insert(
+                        self.con, "vec_episodes", row["id"], self._vec(row["text"])
+                    )
                 elif t["tbl"] == "facts":
                     self.con.execute(
                         "INSERT OR REPLACE INTO facts_fts(id,entity,key,value) VALUES(?,?,?,?)",
-                        (row["id"], row["entity"], row["key"], row["value"]))
-                    vec_insert(self.con, "vec_facts", row["id"],
-                               self._vec(f"{row['entity']} {row['key']} {row['value']}"))
+                        (row["id"], row["entity"], row["key"], row["value"]),
+                    )
+                    vec_insert(
+                        self.con,
+                        "vec_facts",
+                        row["id"],
+                        self._vec(f"{row['entity']} {row['key']} {row['value']}"),
+                    )
+                elif t["tbl"] == "procedures":
+                    vec_insert(
+                        self.con,
+                        "vec_procedures",
+                        row["id"],
+                        self._vec(f"{row.get('trigger', '')} {row.get('steps', '')}"),
+                    )
                 T.remove(self.con, t["id"])
                 n += 1
             self.con.commit()
             return n
 
-    def consolidate(self, limit: int = 50, vacuum: bool = False,
-                    llm: str | None = None, max_llm: int = 20) -> dict:
+    def consolidate(
+        self,
+        limit: int = 50,
+        vacuum: bool = False,
+        llm: str | None = None,
+        max_llm: int = 20,
+    ) -> dict:
         with self._lock:
-            out = C.run_once(self.con, limit, vacuum=vacuum, llm=llm,
-                             max_llm=max_llm)
-        # embed newly created facts so vec index stays warm
+            out = C.run_once(self.con, limit, vacuum=vacuum, llm=llm, max_llm=max_llm)
+        # embed newly created facts/procedures so vec index stays warm
         try:
             rows = self.con.execute(
                 "SELECT id, entity, key, value FROM facts ORDER BY updated DESC LIMIT ?",
-                (out.get("facts_made", 0),)).fetchall()
+                (out.get("facts_made", 0),),
+            ).fetchall()
             from .db import vec_insert
 
             for r in rows:
-                if self.con.execute(
-                    "SELECT COUNT(*) FROM vec_facts WHERE id=?", (r["id"],)
-                ).fetchone()[0] == 0:
-                    vec_insert(self.con, "vec_facts", r["id"],
-                               self._vec(f"{r['entity']} {r['key']} {r['value']}"))
+                if (
+                    self.con.execute(
+                        "SELECT COUNT(*) FROM vec_facts WHERE id=?", (r["id"],)
+                    ).fetchone()[0]
+                    == 0
+                ):
+                    vec_insert(
+                        self.con,
+                        "vec_facts",
+                        r["id"],
+                        self._vec(f"{r['entity']} {r['key']} {r['value']}"),
+                    )
+            prows = self.con.execute(
+                "SELECT id, trigger, steps FROM procedures ORDER BY updated DESC LIMIT ?",
+                (out.get("procedures_made", 0),),
+            ).fetchall()
+            for r in prows:
+                if (
+                    self.con.execute(
+                        "SELECT COUNT(*) FROM vec_procedures WHERE id=?", (r["id"],)
+                    ).fetchone()[0]
+                    == 0
+                ):
+                    vec_insert(
+                        self.con,
+                        "vec_procedures",
+                        r["id"],
+                        self._vec(f"{r['trigger']} {r['steps']}"),
+                    )
             self.con.commit()
         except Exception:
             pass
@@ -160,8 +300,13 @@ class Memory:
         with self._lock:
             n = C.vacuum_old(self.con, older_than_days=older_than_days)
             from . import trash as T
+            from . import store as S
 
             n += T.purge(self.con, older_than_days=trash_days)
+            try:
+                n += S.prune_working(self.con, older_than_days=7)
+            except Exception:
+                pass
             return n
 
     def maintenance(self) -> dict:
@@ -196,6 +341,7 @@ class Memory:
                 "episodes": q("SELECT COUNT(*) FROM episodes"),
                 "facts": q("SELECT COUNT(*) FROM facts"),
                 "procedures": q("SELECT COUNT(*) FROM procedures"),
+                "working": q("SELECT COUNT(*) FROM working"),
                 "unprocessed": q("SELECT COUNT(*) FROM episodes WHERE processed=0"),
                 "db": self.db_path,
                 "embedder": type(self.embedder).__name__,
