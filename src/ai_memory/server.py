@@ -87,6 +87,11 @@ try:
         return mem.stats()
 
     @mcp.tool()
+    def memory_temporal(hours: int = 24) -> dict:
+        """Temporal context: now + today summary + sliding-window activity."""
+        return mem.temporal(hours)
+
+    @mcp.tool()
     def memory_maintenance() -> dict:
         """Integrity check, orphan cleanup, FTS optimize, VACUUM. Returns space stats."""
         return mem.maintenance()

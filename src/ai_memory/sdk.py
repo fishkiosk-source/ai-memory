@@ -118,12 +118,29 @@ class Memory:
     def recall(
         self, query: str, k: int = 5, namespace: str | None = None
     ) -> list[dict]:
+        import time as _time
+
+        from .clock import InternalClock
+
+        clock = InternalClock()
         with self._lock:
             ns = namespace or self.namespace
-            hits = R.recall(self.con, query, k, qvec=self._vec(query), namespace=ns)
-            out = [h.__dict__ for h in hits]
-            try:  # learning loop: reinforce what was useful
+            t0 = _time.time()
+            qvec = self._vec(query)
+            hits = R.recall(self.con, query, k, qvec=qvec, namespace=ns)
+            out = []
+            for h in hits:
+                d = dict(h.__dict__)
+                try:  # pre-bump read: last access BEFORE this query
+                    last = clock.last_accessed_before(self.con, h.ref_id, t0)
+                    cnt = clock.access_count(self.con, h.ref_id)
+                    d["_clock"] = clock.summarize_hit(h.ts, last, cnt + 1, now_epoch=t0)
+                except Exception:
+                    pass
+                out.append(d)
+            try:  # learning loop: reinforce what was useful + access log
                 for h in hits:
+                    clock.log_access(self.con, h.ref_id, h.store, t0)
                     if h.store == "episode":
                         self.con.execute(
                             "UPDATE episodes SET importance=min(1.0, COALESCE(importance,0.5)+0.05) WHERE id=?",
@@ -143,6 +160,17 @@ class Memory:
             except Exception:
                 pass
             return out
+
+    def temporal(self, hours: int = 24) -> dict:
+        from .clock import InternalClock
+
+        with self._lock:
+            clock = InternalClock()
+            return {
+                "now": clock.now(),
+                "today": clock.today_summary(self.con),
+                "activity": clock.graph_activity(self.con, hours=hours),
+            }
 
     def recent(self, limit: int = 5, namespace: str | None = None) -> list[dict]:
         with self._lock:
@@ -307,6 +335,23 @@ class Memory:
                 n += S.prune_working(self.con, older_than_days=7)
             except Exception:
                 pass
+            try:  # drop access rows for deleted refs + very old touches
+                import time as _time
+
+                cur = self.con.execute(
+                    "DELETE FROM access_log WHERE ref_id NOT IN "
+                    "(SELECT id FROM episodes UNION SELECT id FROM facts "
+                    "UNION SELECT id FROM procedures)"
+                )
+                n += cur.rowcount
+                cur = self.con.execute(
+                    "DELETE FROM access_log WHERE accessed_at<?",
+                    (_time.time() - 90 * 86400,),
+                )
+                n += cur.rowcount
+                self.con.commit()
+            except Exception:
+                pass
             return n
 
     def maintenance(self) -> dict:
@@ -342,6 +387,7 @@ class Memory:
                 "facts": q("SELECT COUNT(*) FROM facts"),
                 "procedures": q("SELECT COUNT(*) FROM procedures"),
                 "working": q("SELECT COUNT(*) FROM working"),
+                "accesses": q("SELECT COUNT(*) FROM access_log"),
                 "unprocessed": q("SELECT COUNT(*) FROM episodes WHERE processed=0"),
                 "db": self.db_path,
                 "embedder": type(self.embedder).__name__,

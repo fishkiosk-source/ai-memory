@@ -57,6 +57,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-n", "--limit", type=int, default=5)
     p.add_argument("--namespace", default=None)
 
+    p = sub.add_parser("temporal", help="now + today summary + activity")
+    p.add_argument("--hours", type=int, default=24)
+
     sub.add_parser("stats", help="print counts")
 
     args = ap.parse_args(argv)
@@ -92,6 +95,8 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "recent":
         for r in m.recent(limit=args.limit, namespace=args.namespace):
             print(f"{r['ts']:.0f} [{r['session_id']}] {r['text']}")
+    elif args.cmd == "temporal":
+        print(m.temporal(hours=args.hours))
     elif args.cmd == "stats":
         print(m.stats())
     return 0

@@ -75,6 +75,7 @@ def test_http_tools_and_roundtrip(server):
                 "memory_store",
                 "memory_recall",
                 "memory_recent",
+                "memory_temporal",
                 "memory_forget",
                 "memory_restore",
                 "memory_consolidate",

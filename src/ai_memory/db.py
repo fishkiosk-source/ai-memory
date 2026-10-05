@@ -16,6 +16,10 @@ CREATE TABLE IF NOT EXISTS procedures(
   uses INT DEFAULT 1, success REAL DEFAULT 0.5, updated REAL, ns TEXT DEFAULT 'default');
 CREATE TABLE IF NOT EXISTS working(
   session_id TEXT, ts REAL, role TEXT, text TEXT, ns TEXT DEFAULT 'default');
+CREATE TABLE IF NOT EXISTS access_log(
+  ref_id TEXT, store TEXT, accessed_at REAL);
+CREATE INDEX IF NOT EXISTS idx_access_ref ON access_log(ref_id, accessed_at);
+CREATE INDEX IF NOT EXISTS idx_access_ts ON access_log(accessed_at);
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(id UNINDEXED, text);
 CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(id UNINDEXED, entity, key, value);
 CREATE INDEX IF NOT EXISTS idx_ep_ts ON episodes(ts);
