@@ -9,6 +9,22 @@ from .db import connect
 from .sdk import Memory
 
 
+def _parse_time(s: str | None) -> float | None:
+    """Epoch float or YYYY-MM-DD, else None."""
+    if s is None or s == "":
+        return None
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        pass
+    try:
+        from datetime import datetime
+
+        return datetime.strptime(s, "%Y-%m-%d").timestamp()
+    except (TypeError, ValueError):
+        raise SystemExit(f"bad time {s!r}: use epoch or YYYY-MM-DD")
+
+
 def main(argv: list[str] | None = None) -> int:
     cfg = Config()
     ap = argparse.ArgumentParser(description="AI memory portable CLI")
@@ -38,6 +54,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("query")
     p.add_argument("-k", type=int, default=5)
     p.add_argument("--namespace", default=None)
+    p.add_argument(
+        "--since",
+        default=None,
+        help="epoch or YYYY-MM-DD: only rows at/after this time",
+    )
+    p.add_argument(
+        "--until",
+        default=None,
+        help="epoch or YYYY-MM-DD: only rows at/before this time",
+    )
 
     p = sub.add_parser("forget", help="soft-delete rows matching id or text")
     p.add_argument("--ref-id", default=None)
@@ -80,7 +106,13 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "maintenance":
         print(m.maintenance())
     elif args.cmd == "recall":
-        for h in m.recall(args.query, k=args.k, namespace=args.namespace):
+        for h in m.recall(
+            args.query,
+            k=args.k,
+            namespace=args.namespace,
+            since=_parse_time(args.since),
+            until=_parse_time(args.until),
+        ):
             print(f"{h['score']:.3f} [{h['store']}] {h['text']}")
     elif args.cmd == "forget":
         print(m.forget(ref_id=args.ref_id, query=args.query))

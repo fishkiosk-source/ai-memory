@@ -28,36 +28,46 @@ def test_stale_logic():
     assert c.summarize_hit(now - 60, now - 60, 0, now)["stale"] is False
 
 
-def test_recall_is_pure_read():
+def test_recall_logs_access_without_mutating_content():
+    # v0.9 contract: recall logs one access row per returned hit (frequency
+    # signal) but never mutates row content: no clock annotation in text,
+    # no importance/uses bumps.
     m = Memory(db_path=tempfile.mktemp(suffix=".db"), embed_provider="hash")
-    m.store("Remember: user prefers dark mode", namespace="clk")
+    eid = m.store("Remember: user prefers dark mode", namespace="clk")
+    imp0 = m.con.execute(
+        "SELECT importance FROM episodes WHERE id=?", (eid,)
+    ).fetchone()[0]
     before = m.stats()["accesses"]
     h1 = m.recall("dark mode", namespace="clk")
-    assert h1 and "_clock" not in h1[0], (
-        h1
-    )  # recall is a pure read: no clock annotation
-    # recall must not write access_log or bump importance/uses
-    assert m.stats()["accesses"] == before, m.stats()
+    assert h1 and "_clock" not in h1[0]["text"], h1
+    assert m.stats()["accesses"] == before + len(h1), m.stats()
+    imp1 = m.con.execute(
+        "SELECT importance FROM episodes WHERE id=?", (eid,)
+    ).fetchone()[0]
+    assert imp1 == imp0, (imp0, imp1)
     h2 = m.recall("dark mode", namespace="clk")
-    assert m.stats()["accesses"] == before
+    assert m.stats()["accesses"] == before + len(h1) + len(h2)
+    # frequency boost: same top hit scores higher the second time
+    assert h2[0]["ref_id"] == h1[0]["ref_id"], (h1, h2)
+    assert h2[0]["score"] >= h1[0]["score"], (h1[0], h2[0])
 
 
 def test_temporal_summary():
     m = Memory(db_path=tempfile.mktemp(suffix=".db"), embed_provider="hash")
     m.store("Remember: temporal probe", namespace="clk")
-    m.recall("temporal probe", namespace="clk")
+    hits = m.recall("temporal probe", namespace="clk")
     t = m.temporal()
     assert "now" in t and "today" in t and "activity" in t, t
     assert t["today"]["episodes_added_today"] >= 1
-    # recall is a pure read, so it does not populate access_log; activity starts at 0
-    assert t["activity"]["accesses"] == 0
+    # v0.9: recall logs its hits, so activity reflects them
+    assert t["activity"]["accesses"] == len(hits) >= 1, t
 
 
 if __name__ == "__main__":
     for fn in (
         test_humanize_buckets,
         test_stale_logic,
-        test_recall_attaches_clock_and_logs_access,
+        test_recall_logs_access_without_mutating_content,
         test_temporal_summary,
     ):
         fn()

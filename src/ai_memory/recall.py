@@ -1,9 +1,10 @@
 """Read path: hybrid FTS + sqlite-vec, recency*importance rerank.
 
-Final per architecture.md:
-  score = 0.5*vec_sim + 0.3*fts_norm + 0.15*importance + 0.05*recency
+Final per architecture.md (v0.9):
+  score = 0.45*vec_sim + 0.3*fts_norm + 0.15*importance + 0.05*recency + 0.05*freq
   vec_sim = 1 - cosine_distance (sqlite-vec), clipped to [0,1]
   fts_norm = 1/(1+rank) over FTS hit order; 0 when no FTS hit
+  freq = log1p(access_count)/log1p(20), capped at 1 (access_log reads only)
 """
 
 from __future__ import annotations
@@ -15,7 +16,8 @@ import time
 from .db import vec_search
 from .models import RecallHit
 
-W_VEC, W_FTS, W_IMP, W_REC = 0.5, 0.3, 0.15, 0.05
+W_VEC, W_FTS, W_IMP, W_REC, W_FREQ = 0.45, 0.3, 0.15, 0.05, 0.05
+FREQ_SAT = 20  # accesses at which the frequency boost saturates
 
 
 def _recency(ts: float, lam: float = 0.01) -> float:
@@ -74,13 +76,40 @@ def _sanitize_match(query: str) -> str | None:
     return " OR ".join(toks)
 
 
+def _freq_norm(count: int) -> float:
+    try:
+        return min(1.0, math.log1p(max(0, count)) / math.log1p(FREQ_SAT))
+    except Exception:
+        return 0.0
+
+
+def _access_counts(con: sqlite3.Connection, ref_ids: set[str]) -> dict[str, int]:
+    """Batched access_log reads (pure read — logging happens in SDK.recall)."""
+    if not ref_ids:
+        return {}
+    try:
+        qs = ",".join("?" for _ in ref_ids)
+        rows = con.execute(
+            f"SELECT ref_id, COUNT(*) AS n FROM access_log "
+            f"WHERE ref_id IN ({qs}) GROUP BY ref_id",
+            tuple(ref_ids),
+        ).fetchall()
+        return {r["ref_id"]: int(r["n"]) for r in rows}
+    except Exception:
+        return {}
+
+
 def recall(
     con: sqlite3.Connection,
     query: str,
     k: int = 5,
     qvec: list[float] | None = None,
     namespace: str | None = None,
+    since: float | None = None,
+    until: float | None = None,
 ) -> list[RecallHit]:
+    """Hybrid recall. since/until are epoch bounds on row time
+    (episodes.ts, facts/procedures .updated). No DB writes."""
     fts_rank: dict[tuple[str, str], float] = {}  # (store, id) -> fts_norm
     vec_sim: dict[tuple[str, str], float] = {}
 
@@ -149,19 +178,25 @@ def recall(
     except Exception:
         pass
 
-    # 4. rerank union
+    # 4. rerank union (time-range filter + frequency boost)
     keys = set(fts_rank) | set(vec_sim)
+    counts = _access_counts(con, {ref_id for _, ref_id in keys})
     hits: list[RecallHit] = []
     for store, ref_id in keys:
         row = _fetch(con, store, ref_id, namespace)
         if row is None:
             continue
         text, ts, imp, meta = row
+        if since is not None and ts < since:
+            continue
+        if until is not None and ts > until:
+            continue
         score = (
             W_VEC * vec_sim.get((store, ref_id), 0.0)
             + W_FTS * fts_rank.get((store, ref_id), 0.0)
             + W_IMP * imp
             + W_REC * _recency(ts)
+            + W_FREQ * _freq_norm(counts.get(ref_id, 0))
         )
         hits.append(RecallHit(ref_id, store, text, round(score, 4), ts, meta))
     hits.sort(key=lambda h: h.score, reverse=True)

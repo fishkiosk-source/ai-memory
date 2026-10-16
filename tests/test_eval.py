@@ -1,4 +1,5 @@
 """v0.2 eval: exact + paraphrase/fuzzy + procedural. Run: uv run pytest tests/test_eval.py -q"""
+
 import os
 import sys
 import tempfile
@@ -14,7 +15,11 @@ SEED = [
     ("episode", "Decided: deploy on Fridays is banned after the outage", {}),
     ("episode", "User prefers dark mode in all apps", {}),
     ("fact", "Portugal", {"entity": "user", "key": "vacation_2026"}),
-    ("fact", "all-MiniLM-L6-v2 with sqlite-vec", {"entity": "project", "key": "embedder"}),
+    (
+        "fact",
+        "all-MiniLM-L6-v2 with sqlite-vec",
+        {"entity": "project", "key": "embedder"},
+    ),
     ("procedure", " inviting", {}),  # placeholder replaced below
 ]
 
@@ -28,6 +33,10 @@ CASES = [
     ("where vacation 2026?", "portugal", "fuzzy"),
     ("which embedder project uses?", "sqlite-vec", "fuzzy"),
     ("how to onboard new contributor?", "onboard", "procedural"),
+    # v0.9 additions: paraphrase + second procedural
+    ("what is the cat called?", "miso", "fuzzy"),
+    ("shy tabby", "miso", "exact"),
+    ("how to rotate logs?", "logrotate", "procedural"),
 ]
 
 
@@ -38,10 +47,23 @@ def build(provider: str = PROVIDER) -> Memory:
     m.store("Decided: deploy on Fridays is banned after the outage")
     m.store("User prefers dark mode in all apps")
     m.store("Portugal", kind="fact", entity="user", key="vacation_2026")
-    m.store("all-MiniLM-L6-v2 with sqlite-vec", kind="fact",
-            entity="project", key="embedder")
-    m.store("Run onboard.sh, then copy .env.example to .env, then uv sync",
-            kind="procedure", key="onboard new contributor")
+    m.store(
+        "all-MiniLM-L6-v2 with sqlite-vec",
+        kind="fact",
+        entity="project",
+        key="embedder",
+    )
+    m.store(
+        "Run onboard.sh, then copy .env.example to .env, then uv sync",
+        kind="procedure",
+        key="onboard new contributor",
+    )
+    m.store("User's cat is named Miso, a shy tabby")
+    m.store(
+        "To rotate logs run logrotate -f, then systemctl reload observer",
+        kind="procedure",
+        key="rotate observer logs",
+    )
     return m
 
 
@@ -53,8 +75,12 @@ def score(m: Memory, k: int = 3) -> dict:
         ok = want.lower() in blob
         passed += ok
         rows.append((ok, kind, q, want, hits[0]["text"][:80] if hits else "<none>"))
-    return {"passed": passed, "total": len(CASES), "rows": rows,
-            "recall_at_3": round(passed / len(CASES), 3)}
+    return {
+        "passed": passed,
+        "total": len(CASES),
+        "rows": rows,
+        "recall_at_3": round(passed / len(CASES), 3),
+    }
 
 
 def test_eval_recall():
@@ -62,9 +88,11 @@ def test_eval_recall():
     r = score(m)
     for ok, kind, q, want, top in r["rows"]:
         print(f"{'PASS' if ok else 'FAIL'} [{kind}] q={q!r} want={want!r} top={top!r}")
-    print(f"recall@3 = {r['recall_at_3']} ({r['passed']}/{r['total']}) provider={PROVIDER}")
-    # hash fallback must pass exact; ST/real embedder must pass >=6/8
-    min_pass = 6 if PROVIDER != "hash" else 4
+    print(
+        f"recall@3 = {r['recall_at_3']} ({r['passed']}/{r['total']}) provider={PROVIDER}"
+    )
+    # hash fallback must pass most; ST/real embedder must pass near-all
+    min_pass = 10 if PROVIDER != "hash" else 8
     assert r["passed"] >= min_pass, r
 
 

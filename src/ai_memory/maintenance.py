@@ -43,6 +43,22 @@ def run_maintenance(con: sqlite3.Connection) -> dict:
         orphans += cur.rowcount
     except Exception:
         pass
+    try:  # access_log is written on every recall: bound it by age + orphans
+        import time as _time2
+
+        cur = con.execute(
+            "DELETE FROM access_log WHERE ref_id NOT IN "
+            "(SELECT id FROM episodes UNION SELECT id FROM facts "
+            "UNION SELECT id FROM procedures)"
+        )
+        orphans += cur.rowcount
+        cur = con.execute(
+            "DELETE FROM access_log WHERE accessed_at<?",
+            (_time2.time() - 90 * 86400,),
+        )
+        orphans += cur.rowcount
+    except Exception:
+        pass
     con.commit()
 
     # FTS index rebuild hints

@@ -69,7 +69,7 @@ Mental model: `capture everything cheap → score → consolidate nightly → re
 
 **Store:** `harness → mcp.memory_store → salience.score → episodes.insert (+ facts.insert if type=fact) → embeddings.insert (async/best-effort)`
 
-**Recall:** `query → embed(query) → FTS hits ∪ vec hits → recency*importance rerank → return with citations (source_episode_ids)`
+**Recall:** `query → embed(query) → FTS hits ∪ vec hits → [since/until time filter] → recency*importance*frequency rerank → log accesses → return with citations (source_episode_ids)`
 
 **Consolidate (background):** `unprocessed episodes → LLM/local rules → candidate facts/procedures → dedupe/merge → mark episodes.processed → decay low-importance`
 
@@ -112,18 +112,27 @@ IDs: `mem_<ulid-ish>` via `time + random`. Timestamps: unix float UTC.
 - **Graceful degradation:** if `sqlite-vec` or embedding model missing → FTS-only still works. Core has **zero required deps** (stdlib only).
 - **Scale:** fine to ~1M episodes/facts on laptop. Migrate to Postgres pgvector later without API change.
 
-## 6. Recall Ranking (v0.2 implemented)
+## 6. Recall Ranking (v0.9)
 
 ```
 candidates = fts_top_50 (rank-norm 1/(1+rank)) ∪ vec_top_50 (sqlite-vec cosine distance)
 vec_sim = clip(1 - cosine_distance, 0, 1)
-score = 0.5*vec_sim + 0.3*fts_norm + 0.15*importance + 0.05*recency_decay
+score = 0.45*vec_sim + 0.3*fts_norm + 0.15*importance + 0.05*recency_decay + 0.05*freq
 recency_decay = exp(-0.01 * age_days)
+freq = log1p(access_count)/log1p(20), capped at 1 (saturates ~20 accesses)
 ```
 
-- `vec0` tables `vec_episodes` / `vec_facts`, 384-dim, `serialize_float32`, indexed at store time.
+- `vec0` tables `vec_episodes` / `vec_facts` / `vec_procedures`, 384-dim, `serialize_float32`, indexed at store time.
 - FTS5 query sanitized (`OR` of alnum tokens, LIKE fallback).
-- Eval: `tests/test_eval.py`, 8 cases (exact + paraphrase + procedural), `recall@3 = 1.0` **with correct top-1 on all 8**, both `hash` and `st` providers. FTS MATCH drops stopwords (`user/like/what/...`) so lexical noise can't outvote vector signal.
+- Time-range filters: `recall(since, until)` (epoch) bounds row time
+  (`episodes.ts`, `facts/procedures.updated`); CLI accepts epoch or `YYYY-MM-DD`.
+- Frequency: `SDK.recall` logs one `access_log` row per returned hit, so
+  re-needed rows drift up over time. `maintenance` prunes access rows older
+  than 90d + orphans, so the log stays bounded (~k rows/recall).
+- Eval: `tests/test_eval.py`, 11 cases (exact + paraphrase + procedural),
+  `recall@3 = 1.0` on **both** `hash` and `st` providers; `tests/test_recall_v09.py`
+  covers range filters, frequency boost, namespace isolation.
+  FTS MATCH drops stopwords (`user/like/what/...`) so lexical noise can't outvote vector signal.
 
 ## 7. Salience, Consolidation, Forgetting
 
@@ -173,6 +182,8 @@ Harness-agnostic: `harness` field tags provenance (`opencode`, `cursor`, etc.) s
 - [x] **v0.6 LLM hook + maintenance:** opt-in `AI_MEMORY_LLM=ollama|openai`, `memory_maintenance` (integrity, orphans, FTS optimize, VACUUM), `tests/test_llm_maint.py`
 - [x] **v0.7 OpenCode plugin:** global `ai-memory` plugin — first-turn profile briefing via `context` hook (CLI recall, best-effort, per-session flag), `/remember` command (store + consolidate), `recall/store/consolidate` CLI subcommands, hook trace at `/tmp/ai-memory-hook.log`
 - [x] **v0.8 Safety net (done):** `forget` soft-deletes into `trash` (unrecallable immediately, `memory_restore` within 30d, auto-purge in vacuum), `backup --keep N` retention, daily 02:00 cron (`backup --keep 14`), `tests/test_safety.py`
+- [x] **v0.8.6 Vec hygiene (done):** root cause — cron worker never passed `embed_fn`, so cron-mined facts/procedures had no vecs; cron also lacked `AI_MEMORY_EMBED=st` (vec-space mix risk). Added `SDK.backfill_vecs` + `ai-memory backfill-vecs` CLI + `memory_backfill_vecs` MCP tool, worker `--embed` wiring, prod backfilled to 100% vecs. Backups pruned to keep-5. Fact-key caps (`[:40]`), `tests/test_backfill.py`
+- [x] **v0.9 Recall quality (done):** rerank `0.45*vec + 0.3*fts + 0.15*imp + 0.05*recency + 0.05*freq` (`freq=log1p(n)/log1p(20)`); `recall(since, until)` time-range filters (epoch; CLI takes epoch/`YYYY-MM-DD`); `SDK.recall` logs one `access_log` row per hit (ends pure-read contract — tests updated); `maintenance` prunes access rows >90d + orphans. Eval expanded 8→11 cases, `recall@3 = 1.0` on hash+st; `tests/test_recall_v09.py` (range, frequency, namespace, prune)
 
 ## 11. Repo Layout
 

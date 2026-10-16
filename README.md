@@ -1,8 +1,8 @@
 # AI Memory — local-first, brain-inspired, MCP-pluggable
 
-v0.8 + OpenCode harness v2. See `architecture.md` for design.
+v0.9 + OpenCode harness v2. See `architecture.md` for design.
 
-- Hybrid recall (sqlite-vec + FTS5 + importance + recency), `recall@3 = 1.0` on 8-case eval
+- Hybrid recall (sqlite-vec + FTS5 + importance + recency + frequency), time-range filters, `recall@3 = 1.0` on 11-case eval
 - Consolidation worker (rules + opt-in LLM), namespaces, export/import, backup retention
 - Safety net: `forget` soft-deletes into `trash` (30d restore), vacuum purges
 - OpenCode harness: project-scoped briefing, per-prompt recall, auto-capture on idle, `/remember /recall /forget /stats /consolidate`
@@ -58,6 +58,8 @@ uv run ai-memory backup --keep 5         # timestamped copy, prune to newest 5
 uv run ai-memory restore --query "oops"   # undo a forget within 30 days
 uv run ai-memory forget --query "oops"    # soft-delete into trash (same as memory_forget)
 uv run ai-memory recall "what did we decide?" -k 5 --namespace myproject
+uv run ai-memory recall "plasticity" -k 5 --since 2026-10-15 --until 2026-10-17
+uv run ai-memory backfill-vecs   # recompute rows missing from vec tables
 ```
 
 `forget` never hard-deletes: rows move to `trash` (immediately unrecallable),

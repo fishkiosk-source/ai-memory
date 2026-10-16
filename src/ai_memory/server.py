@@ -40,10 +40,14 @@ try:
 
     @mcp.tool()
     def memory_recall(
-        query: str, k: int = 5, namespace: str | None = None
+        query: str,
+        k: int = 5,
+        namespace: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
     ) -> list[dict]:
-        """Hybrid recall (sqlite-vec cosine + FTS + importance + recency)."""
-        return mem.recall(query, k, namespace=namespace)
+        """Hybrid recall (sqlite-vec cosine + FTS + importance + recency + frequency). since/until are epoch bounds on row time."""
+        return mem.recall(query, k, namespace=namespace, since=since, until=until)
 
     @mcp.tool()
     def memory_recent(limit: int = 5, namespace: str | None = None) -> list[dict]:

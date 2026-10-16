@@ -132,14 +132,45 @@ class Memory:
         )
 
     def recall(
-        self, query: str, k: int = 5, namespace: str | None = None
+        self,
+        query: str,
+        k: int = 5,
+        namespace: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
     ) -> list[dict]:
-        """Pure read: hybrid FTS + sqlite-vec + importance + recency rerank. No DB writes."""
+        """Hybrid FTS + sqlite-vec + importance + recency + frequency rerank.
+
+        Logs one access row per returned hit so frequently-needed rows rank
+        higher over time (frequency saturates at ~20 accesses).
+        """
+        import time as _time
+
         with self._lock:
             ns = namespace or self.namespace
             qvec = self._vec(query)
-            hits = R.recall(self.con, query, k, qvec=qvec, namespace=ns)
-            return [dict(h.__dict__) for h in hits]
+            hits = R.recall(
+                self.con,
+                query,
+                k,
+                qvec=qvec,
+                namespace=ns,
+                since=since,
+                until=until,
+            )
+            out = [dict(h.__dict__) for h in hits]
+            if out:
+                try:
+                    now = _time.time()
+                    self.con.executemany(
+                        "INSERT INTO access_log(ref_id,store,accessed_at)"
+                        " VALUES(?,?,?)",
+                        [(h["ref_id"], h["store"], now) for h in out],
+                    )
+                    self.con.commit()
+                except Exception:
+                    pass
+            return out
 
     def temporal(self, hours: int = 24) -> dict:
         from .clock import InternalClock
