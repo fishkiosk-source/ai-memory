@@ -83,7 +83,10 @@ episodes(id TEXT PK, ts REAL, actor TEXT, text TEXT, harness TEXT,
 -- distilled knowledge
 facts(id TEXT PK, entity TEXT, key TEXT, value TEXT,
       confidence REAL, importance REAL, updated REAL,
-      source_episodes TEXT); -- JSON list
+      source_episodes TEXT, ns TEXT DEFAULT 'default',
+      status TEXT DEFAULT 'active', superseded_by TEXT);
+-- status: 'active' (current) or 'superseded' (corrected by a newer fact with same entity+key)
+-- superseded_by: id of the fact that replaced this one; recall returns active facts only
 
 -- reusable skills
 procedures(id TEXT PK, trigger TEXT, steps TEXT,
@@ -133,7 +136,7 @@ recency_decay = exp(-0.01 * age_days)
 **Consolidator (PFC during sleep):**
 1. fetch `episodes WHERE processed=0 LIMIT 50`
 2. extract `facts/procedures` (regex rules; LLM hook optional via `AI_MEMORY_LLM`)
-3. merge: same `(entity,key)` → update value, `confidence = max + 0.1`, append sources
+3. merge: same `(entity,key)` + same value → reinforce confidence in place; same `(entity,key)` + new value → old fact marked `superseded`, new fact inserted as `active` (fact invalidation on correction)
 4. mark processed, decay: `importance *= 0.99` per run if never recalled
 
 **Forgetting:** explicit `memory_forget(id|query)` always wins. Plus passive decay + `consolidate --vacuum` drops `importance<0.05 and age>90d`.

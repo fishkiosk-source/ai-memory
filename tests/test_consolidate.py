@@ -43,13 +43,24 @@ def test_consolidate_merges():
     m.consolidate()
     n_before = m.stats()["facts"]
     m.store("My editor is helix")
-    m.store("My editor is zed")  # same (entity,key): value update, no new row
+    m.store(
+        "My editor is zed"
+    )  # same (entity,key): old fact superseded, new active row
     m.consolidate()
     rows = m.con.execute(
-        "SELECT value FROM facts WHERE entity='user' AND key='editor'"
+        "SELECT value,status FROM facts WHERE entity='user' AND key='editor'"
     ).fetchall()
-    assert len(rows) == 1 and rows[0][0] == "zed", rows
-    assert m.stats()["facts"] == n_before, (n_before, m.stats())
+    # old fact superseded, new fact active with latest value (order not guaranteed)
+    assert len(rows) == 2, rows
+    vals = sorted((r["value"], r["status"]) for r in rows)
+    assert vals == [("helix", "superseded"), ("zed", "active")], rows
+    # only active facts counted via recall / stats filter
+    assert m.stats()["facts"] == n_before + 1, (n_before, m.stats())
+    # recall returns only the active value as a fact
+    hits = m.recall("which editor?", k=3)
+    fact_hits = [h for h in hits if h["store"] == "fact"]
+    assert any("zed" in h["text"].lower() for h in fact_hits), hits
+    assert not any("helix" in h["text"].lower() for h in fact_hits), hits
 
 
 def test_vacuum_drops_old_trivia():

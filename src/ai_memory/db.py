@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS episodes(
   harness TEXT, importance REAL, processed INT DEFAULT 0, ns TEXT DEFAULT 'default');
 CREATE TABLE IF NOT EXISTS facts(
   id TEXT PRIMARY KEY, entity TEXT, key TEXT, value TEXT,
-  confidence REAL, importance REAL, updated REAL, source_episodes TEXT, ns TEXT DEFAULT 'default');
+  confidence REAL, importance REAL, updated REAL, source_episodes TEXT, ns TEXT DEFAULT 'default',
+  status TEXT DEFAULT 'active', superseded_by TEXT);
 CREATE TABLE IF NOT EXISTS procedures(
   id TEXT PRIMARY KEY, trigger TEXT, steps TEXT,
   uses INT DEFAULT 1, success REAL DEFAULT 0.5, updated REAL, ns TEXT DEFAULT 'default');
@@ -33,12 +34,19 @@ _STATE: dict[int, dict] = {}
 
 
 def _migrate(con: sqlite3.Connection) -> None:
-    """Add ns columns to pre-v0.4 databases; NULL/""/missing -> 'default'."""
+    """Add ns columns to pre-v0.4 databases; NULL/""/missing -> 'default'.
+    Add fact status/superseded_by columns for v0.8.5 invalidation."""
     for tbl in ("episodes", "facts", "procedures", "working"):
         cols = [r["name"] for r in con.execute(f"PRAGMA table_info({tbl})").fetchall()]
         if "ns" not in cols:
             con.execute(f"ALTER TABLE {tbl} ADD COLUMN ns TEXT DEFAULT 'default'")
         con.execute(f"UPDATE {tbl} SET ns='default' WHERE ns IS NULL OR ns=''")
+    fact_cols = [r["name"] for r in con.execute("PRAGMA table_info(facts)").fetchall()]
+    if "status" not in fact_cols:
+        con.execute("ALTER TABLE facts ADD COLUMN status TEXT DEFAULT 'active'")
+    if "superseded_by" not in fact_cols:
+        con.execute("ALTER TABLE facts ADD COLUMN superseded_by TEXT")
+    con.execute("UPDATE facts SET status='active' WHERE status IS NULL")
     for idx, tbl in (("idx_ep_ns", "episodes"), ("idx_facts_ns", "facts")):
         try:
             con.execute(f"CREATE INDEX IF NOT EXISTS {idx} ON {tbl}(ns)")

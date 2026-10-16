@@ -56,28 +56,42 @@ def store_fact(
     imp = salience.score(f"{entity} {key} {value}", "fact", importance)
     ts = time.time()
     row = con.execute(
-        "SELECT id,confidence,source_episodes FROM facts WHERE entity=? AND key=? AND ns=?",
+        "SELECT id,confidence,source_episodes,value,status FROM facts WHERE entity=? AND key=? AND ns=? AND status='active'",
         (entity, key, namespace),
     ).fetchone()
-    if row:  # merge = cortical consolidation (per-namespace)
+    mid = _nid("fact")
+    if row:  # merge/invalidate = cortical consolidation (per-namespace)
         old_src = json.loads(row["source_episodes"] or "[]")
         merged = sorted(set(old_src) | set(source_episodes))
-        conf = min(1.0, max(confidence, row["confidence"]) + 0.05)
+        old_value = row["value"]
+        old_status = row["status"] or "active"
+        if old_value == value and old_status == "active":
+            # same key + same value: reinforce in place, no new row
+            conf = min(1.0, max(confidence, row["confidence"]) + 0.05)
+            con.execute(
+                "UPDATE facts SET confidence=?,importance=?,updated=?,source_episodes=? WHERE id=?",
+                (conf, max(imp, 0.5), ts, json.dumps(merged), row["id"]),
+            )
+            if vec is not None:
+                vec_insert(con, "vec_facts", row["id"], vec)
+            con.commit()
+            return row["id"]
+        # same key + new value: invalidate old active fact, insert new active row
         con.execute(
-            "UPDATE facts SET value=?,confidence=?,importance=?,updated=?,source_episodes=? WHERE id=?",
-            (value, conf, max(imp, 0.5), ts, json.dumps(merged), row["id"]),
+            "UPDATE facts SET status='superseded', superseded_by=? WHERE id=? AND status='active'",
+            (mid, row["id"]),
         )
         con.execute(
-            "UPDATE facts_fts SET entity=?,key=?,value=? WHERE id=?",
-            (entity, key, value, row["id"]),
+            "INSERT INTO facts_fts(id,entity,key,value) VALUES(?,?,?,?)",
+            (mid, entity, key, value),
         )
-        if vec is not None:
-            vec_insert(con, "vec_facts", row["id"], vec)
-        con.commit()
-        return row["id"]
-    mid = _nid("fact")
+    else:
+        con.execute(
+            "INSERT INTO facts_fts(id,entity,key,value) VALUES(?,?,?,?)",
+            (mid, entity, key, value),
+        )
     con.execute(
-        "INSERT INTO facts(id,entity,key,value,confidence,importance,updated,source_episodes,ns) VALUES(?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO facts(id,entity,key,value,confidence,importance,updated,source_episodes,ns,status,superseded_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         (
             mid,
             entity,
@@ -88,14 +102,13 @@ def store_fact(
             ts,
             json.dumps(source_episodes),
             namespace,
+            "active",
+            None,
         ),
-    )
-    con.execute(
-        "INSERT INTO facts_fts(id,entity,key,value) VALUES(?,?,?,?)",
-        (mid, entity, key, value),
     )
     vec_insert(con, "vec_facts", mid, vec)
     con.commit()
+    return mid
     return mid
 
 

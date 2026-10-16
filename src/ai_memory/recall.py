@@ -105,7 +105,7 @@ def recall(
             ).fetchall():
                 fts_rank.setdefault(("episode", r["id"]), 0.4)
             for r in con.execute(
-                "SELECT id FROM facts WHERE entity LIKE ? OR key LIKE ? OR value LIKE ? LIMIT 20",
+                "SELECT id FROM facts WHERE (entity LIKE ? OR key LIKE ? OR value LIKE ?) AND status='active' LIMIT 20",
                 (like, like, like),
             ).fetchall():
                 fts_rank.setdefault(("fact", r["id"]), 0.4)
@@ -188,7 +188,9 @@ def _fetch(
             {"actor": r["actor"], "harness": r["harness"]},
         )
     if store == "fact":
-        r = con.execute("SELECT * FROM facts WHERE id=?", (ref_id,)).fetchone()
+        r = con.execute(
+            "SELECT * FROM facts WHERE id=? AND status='active'", (ref_id,)
+        ).fetchone()
         if not r or not _ns_ok(r["ns"] if "ns" in r.keys() else None, namespace):
             return None
         try:
