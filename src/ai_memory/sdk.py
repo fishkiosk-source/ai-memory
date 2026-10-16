@@ -134,48 +134,12 @@ class Memory:
     def recall(
         self, query: str, k: int = 5, namespace: str | None = None
     ) -> list[dict]:
-        import time as _time
-
-        from .clock import InternalClock
-
-        clock = InternalClock()
+        """Pure read: hybrid FTS + sqlite-vec + importance + recency rerank. No DB writes."""
         with self._lock:
             ns = namespace or self.namespace
-            t0 = _time.time()
             qvec = self._vec(query)
             hits = R.recall(self.con, query, k, qvec=qvec, namespace=ns)
-            out = []
-            for h in hits:
-                d = dict(h.__dict__)
-                try:  # pre-bump read: last access BEFORE this query
-                    last = clock.last_accessed_before(self.con, h.ref_id, t0)
-                    cnt = clock.access_count(self.con, h.ref_id)
-                    d["_clock"] = clock.summarize_hit(h.ts, last, cnt + 1, now_epoch=t0)
-                except Exception:
-                    pass
-                out.append(d)
-            try:  # learning loop: reinforce what was useful + access log
-                for h in hits:
-                    clock.log_access(self.con, h.ref_id, h.store, t0)
-                    if h.store == "episode":
-                        self.con.execute(
-                            "UPDATE episodes SET importance=min(1.0, COALESCE(importance,0.5)+0.05) WHERE id=?",
-                            (h.ref_id,),
-                        )
-                    elif h.store == "fact":
-                        self.con.execute(
-                            "UPDATE facts SET importance=min(1.0, COALESCE(importance,0.5)+0.05) WHERE id=?",
-                            (h.ref_id,),
-                        )
-                    elif h.store == "procedure":
-                        self.con.execute(
-                            "UPDATE procedures SET uses=COALESCE(uses,1)+1 WHERE id=?",
-                            (h.ref_id,),
-                        )
-                self.con.commit()
-            except Exception:
-                pass
-            return out
+            return [dict(h.__dict__) for h in hits]
 
     def temporal(self, hours: int = 24) -> dict:
         from .clock import InternalClock
@@ -200,34 +164,38 @@ class Memory:
     def _forget(self, ref_id: str | None = None, query: str | None = None) -> int:
         from . import trash as T
 
+        ns = self.namespace or "default"
         n = 0
-        ids = [ref_id] if ref_id else []
+        ids = []
+        if ref_id:
+            ids.append(ref_id)
         if query:
             like = f"%{query}%"
             ids += [
                 r[0]
                 for r in self.con.execute(
-                    "SELECT id FROM episodes WHERE text LIKE ?", (like,)
+                    "SELECT id FROM episodes WHERE text LIKE ? AND ns=?",
+                    (like, ns),
                 ).fetchall()
             ]
             ids += [
                 r[0]
                 for r in self.con.execute(
-                    "SELECT id FROM facts WHERE entity LIKE ? OR key LIKE ? OR value LIKE ?",
-                    (like, like, like),
+                    "SELECT id FROM facts WHERE (entity LIKE ? OR key LIKE ? OR value LIKE ?) AND ns=?",
+                    (like, like, like, ns),
                 ).fetchall()
             ]
             ids += [
                 r[0]
                 for r in self.con.execute(
-                    "SELECT id FROM procedures WHERE trigger LIKE ? OR steps LIKE ?",
-                    (like, like),
+                    "SELECT id FROM procedures WHERE (trigger LIKE ? OR steps LIKE ?) AND ns=?",
+                    (like, like, ns),
                 ).fetchall()
             ]
         for eid in ids:
             for tbl in ("episodes", "facts", "procedures"):
                 row = self.con.execute(
-                    f"SELECT * FROM {tbl} WHERE id=?", (eid,)
+                    f"SELECT * FROM {tbl} WHERE id=? AND ns=?", (eid, ns)
                 ).fetchone()
                 if row:
                     T.stash(self.con, tbl, row)
@@ -246,8 +214,13 @@ class Memory:
         from . import trash as T
         from .db import vec_insert
 
+        ns = self.namespace or "default"
         with self._lock:
             rows = T.find(self.con, ref_id, query)
+            # scope to this instance's namespace so restore never crosses namespaces
+            rows = [
+                t for t in rows if (json.loads(t["row"]).get("ns") or "default") == ns
+            ]
             n = 0
             for t in rows:
                 row = json.loads(t["row"])
@@ -304,48 +277,8 @@ class Memory:
                 llm=llm,
                 max_llm=max_llm,
                 reprocess=reprocess,
+                embed_fn=self._vec,
             )
-        # embed newly created facts/procedures so vec index stays warm
-        try:
-            rows = self.con.execute(
-                "SELECT id, entity, key, value FROM facts ORDER BY updated DESC LIMIT ?",
-                (out.get("facts_made", 0),),
-            ).fetchall()
-            from .db import vec_insert
-
-            for r in rows:
-                if (
-                    self.con.execute(
-                        "SELECT COUNT(*) FROM vec_facts WHERE id=?", (r["id"],)
-                    ).fetchone()[0]
-                    == 0
-                ):
-                    vec_insert(
-                        self.con,
-                        "vec_facts",
-                        r["id"],
-                        self._vec(f"{r['entity']} {r['key']} {r['value']}"),
-                    )
-            prows = self.con.execute(
-                "SELECT id, trigger, steps FROM procedures ORDER BY updated DESC LIMIT ?",
-                (out.get("procedures_made", 0),),
-            ).fetchall()
-            for r in prows:
-                if (
-                    self.con.execute(
-                        "SELECT COUNT(*) FROM vec_procedures WHERE id=?", (r["id"],)
-                    ).fetchone()[0]
-                    == 0
-                ):
-                    vec_insert(
-                        self.con,
-                        "vec_procedures",
-                        r["id"],
-                        self._vec(f"{r['trigger']} {r['steps']}"),
-                    )
-            self.con.commit()
-        except Exception:
-            pass
         return out
 
     def vacuum(self, older_than_days: int = 90, trash_days: int = 30) -> int:

@@ -124,7 +124,7 @@ recency_decay = exp(-0.01 * age_days)
 
 ## 7. Salience, Consolidation, Forgetting
 
-**Salience (amygdala) v0.1 rules, LLM later:**
+**Salience (amygdala): rule-based; consolidation has an opt-in LLM hook (`AI_MEMORY_LLM`):**
 - 0.9-1.0: user says "remember", "always", "never", profile facts
 - 0.6-0.9: decisions, prefs, errors + fixes
 - 0.3-0.6: normal task context
@@ -132,7 +132,7 @@ recency_decay = exp(-0.01 * age_days)
 
 **Consolidator (PFC during sleep):**
 1. fetch `episodes WHERE processed=0 LIMIT 50`
-2. extract `facts/procedures` (regex rules now, LLM later)
+2. extract `facts/procedures` (regex rules; LLM hook optional via `AI_MEMORY_LLM`)
 3. merge: same `(entity,key)` → update value, `confidence = max + 0.1`, append sources
 4. mark processed, decay: `importance *= 0.99` per run if never recalled
 
@@ -156,9 +156,9 @@ Harness-agnostic: `harness` field tags provenance (`opencode`, `cursor`, etc.) s
 ## 9. Privacy & Safety
 
 - local file by default, no telemetry.
-- `forget` is hard delete (row + vec + FTS).
+- `forget` soft-deletes into `trash` (30d grace, `memory_restore` to undo, `vacuum` purges after grace); row + vec + FTS removed on purge.
 - PII: `entity=user` namespace isolated; export/delete per-entity.
-- Future: encryption at rest (sqlcipher), per-harness tokens.
+- Future: per-harness tokens. (Encryption at rest is out of scope: single local `memory.db`, only the owner can access it.)
 
 ## 10. Build Plan
 

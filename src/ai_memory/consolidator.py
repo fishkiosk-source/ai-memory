@@ -175,6 +175,7 @@ def run_once(
     llm: str | None = None,
     max_llm: int = 20,
     reprocess: bool = False,
+    embed_fn=None,
 ) -> dict:
     import os as _os
     from . import store as S
@@ -209,6 +210,7 @@ def run_once(
             llm_facts += len(out["facts"]) + len(out["procedures"])
         ns = r["ns"] if "ns" in r.keys() and r["ns"] else "default"
         for entity, key, value, conf in out["facts"]:
+            vec = embed_fn(f"{entity} {key} {value}") if embed_fn else None
             S.store_fact(
                 con,
                 entity,
@@ -217,10 +219,12 @@ def run_once(
                 confidence=conf,
                 source_episodes=[r["id"]],
                 namespace=ns,
+                vec=vec,
             )
             facts_made += 1
         for trigger, steps in out["procedures"]:
-            S.store_procedure(con, trigger=trigger, steps=steps, namespace=ns)
+            vec = embed_fn(f"{trigger} {steps}") if embed_fn else None
+            S.store_procedure(con, trigger=trigger, steps=steps, namespace=ns, vec=vec)
             procs_made += 1
         con.execute("UPDATE episodes SET processed=1 WHERE id=?", (r["id"],))
     # passive decay of trivia never promoted

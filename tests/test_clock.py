@@ -28,18 +28,18 @@ def test_stale_logic():
     assert c.summarize_hit(now - 60, now - 60, 0, now)["stale"] is False
 
 
-def test_recall_attaches_clock_and_logs_access():
+def test_recall_is_pure_read():
     m = Memory(db_path=tempfile.mktemp(suffix=".db"), embed_provider="hash")
-    eid = m.store("Remember: user prefers dark mode", namespace="clk")
+    m.store("Remember: user prefers dark mode", namespace="clk")
+    before = m.stats()["accesses"]
     h1 = m.recall("dark mode", namespace="clk")
-    assert h1 and "_clock" in h1[0], h1
-    assert h1[0]["_clock"]["access_count"] >= 1
-    assert h1[0]["_clock"]["added"] is not None
-    # second recall: last_checked reflects the FIRST access, not "just now" bug
-    time.sleep(0.05)
+    assert h1 and "_clock" not in h1[0], (
+        h1
+    )  # recall is a pure read: no clock annotation
+    # recall must not write access_log or bump importance/uses
+    assert m.stats()["accesses"] == before, m.stats()
     h2 = m.recall("dark mode", namespace="clk")
-    assert h2[0]["_clock"]["access_count"] >= 2, h2
-    assert m.stats()["accesses"] >= 2
+    assert m.stats()["accesses"] == before
 
 
 def test_temporal_summary():
@@ -49,7 +49,8 @@ def test_temporal_summary():
     t = m.temporal()
     assert "now" in t and "today" in t and "activity" in t, t
     assert t["today"]["episodes_added_today"] >= 1
-    assert t["activity"]["accesses"] >= 1
+    # recall is a pure read, so it does not populate access_log; activity starts at 0
+    assert t["activity"]["accesses"] == 0
 
 
 if __name__ == "__main__":

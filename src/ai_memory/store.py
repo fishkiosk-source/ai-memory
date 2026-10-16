@@ -14,6 +14,11 @@ def _nid(prefix: str = "mem") -> str:
     return f"{prefix}_{int(time.time() * 1000):x}_{random.randint(0, 0xFFFF):04x}"
 
 
+# Working memory is short-lived (session context). Drop trivia older than this so
+# the table doesn't grow without bound across sessions.
+WORKING_TTL_DAYS = 7
+
+
 def store_episode(
     con: sqlite3.Connection,
     text: str,
@@ -143,6 +148,9 @@ def push_working(
         "(SELECT rowid FROM working WHERE session_id=? AND ns=? ORDER BY ts DESC LIMIT ?)",
         (session_id, namespace, session_id, namespace, limit),
     )
+    # bound working memory across sessions: drop trivia older than the TTL
+    cutoff = time.time() - WORKING_TTL_DAYS * 86400
+    con.execute("DELETE FROM working WHERE ts<?", (cutoff,))
     con.commit()
 
 
