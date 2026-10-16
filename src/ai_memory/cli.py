@@ -65,6 +65,8 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("stats", help="print counts")
 
+    sub.add_parser("backfill-vecs", help="recompute missing vec rows")
+
     args = ap.parse_args(argv)
     m = Memory(db_path=args.db, embed_provider=args.embed)
     if args.cmd == "export":
@@ -102,6 +104,8 @@ def main(argv: list[str] | None = None) -> int:
         print(m.temporal(hours=args.hours))
     elif args.cmd == "stats":
         print(m.stats())
+    elif args.cmd == "backfill-vecs":
+        print(m.backfill_vecs())
     return 0
 
 

@@ -32,7 +32,31 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("AI_MEMORY_LLM", "off"),
         help="LLM hook: off|ollama|openai (rules-only when off)",
     )
+    ap.add_argument(
+        "--embed",
+        default=os.environ.get("AI_MEMORY_EMBED", Config().embed_provider),
+        help="embedder: hash|st|ollama (must match server or vec space mixes)",
+    )
     args = ap.parse_args(argv)
+
+    from .embeddings import get_embedder, DIM_DEFAULT
+
+    try:
+        _embedder = get_embedder(args.embed, DIM_DEFAULT)
+        _dim = getattr(_embedder, "dim", DIM_DEFAULT)
+    except Exception:
+        _embedder, _dim = None, DIM_DEFAULT
+
+    def _vec(text: str):
+        try:
+            if _embedder is None:
+                return None
+            v = _embedder.embed(text)
+            if v is not None and len(v) == _dim:
+                return v
+            return None
+        except Exception:
+            return None
 
     def run() -> dict:
         con = connect(args.db)
@@ -43,6 +67,7 @@ def main(argv: list[str] | None = None) -> int:
                 vacuum=args.vacuum,
                 llm=args.llm,
                 reprocess=args.reprocess,
+                embed_fn=_vec,
             )
         finally:
             con.close()

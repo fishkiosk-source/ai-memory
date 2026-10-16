@@ -336,6 +336,64 @@ class Memory:
             self.con.commit()
             return backup_db(self.db_path, dest, keep=keep)
 
+    def backfill_vecs(self) -> dict:
+        """Recompute vectors for rows missing from vec tables. Returns counts."""
+        from .db import vec_insert
+
+        with self._lock:
+            out = {}
+            jobs = (
+                ("episodes", "vec_episodes", lambda r: r["text"]),
+                (
+                    "facts",
+                    "vec_facts",
+                    lambda r: f"{r['entity']} {r['key']} {r['value']}",
+                ),
+                (
+                    "procedures",
+                    "vec_procedures",
+                    lambda r: (
+                        f"{r['trigger'] if 'trigger' in r.keys() else ''} {r['steps'] if 'steps' in r.keys() else ''}"
+                    ),
+                ),
+            )
+            for base, vec_tbl, text_fn in jobs:
+                try:
+                    missing = [
+                        r[0]
+                        for r in self.con.execute(
+                            f"SELECT id FROM {base} WHERE id NOT IN "
+                            f"(SELECT id FROM {vec_tbl})"
+                        ).fetchall()
+                    ]
+                except Exception:
+                    missing = []
+                done, failed = 0, 0
+                for mid in missing:
+                    row = self.con.execute(
+                        f"SELECT * FROM {base} WHERE id=?", (mid,)
+                    ).fetchone()
+                    if row is None:
+                        continue
+                    try:
+                        vec = self._vec(text_fn(row))
+                    except Exception:
+                        vec = None
+                    if vec is None:
+                        failed += 1
+                        continue
+                    try:
+                        vec_insert(self.con, vec_tbl, mid, vec)
+                        done += 1
+                    except Exception:
+                        failed += 1
+                out[base] = {"missing": len(missing), "filled": done, "failed": failed}
+            try:
+                self.con.commit()
+            except Exception:
+                pass
+            return out
+
     def stats(self) -> dict:
         with self._lock:
             q = lambda s: self.con.execute(s).fetchone()[0]

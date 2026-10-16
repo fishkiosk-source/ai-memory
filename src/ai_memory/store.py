@@ -109,7 +109,6 @@ def store_fact(
     vec_insert(con, "vec_facts", mid, vec)
     con.commit()
     return mid
-    return mid
 
 
 def store_procedure(

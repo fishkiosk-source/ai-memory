@@ -99,6 +99,11 @@ try:
         """Integrity check, orphan cleanup, FTS optimize, VACUUM. Returns space stats."""
         return mem.maintenance()
 
+    @mcp.tool()
+    def memory_backfill_vecs() -> dict:
+        """Recompute vectors for rows missing from vec tables. Returns counts."""
+        return mem.backfill_vecs()
+
 except Exception:  # fastmcp not installed: SDK still works
     mcp = None
 

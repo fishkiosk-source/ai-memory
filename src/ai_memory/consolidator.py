@@ -113,13 +113,15 @@ def extract(text: str) -> dict:
             )
         )
     elif (m := REMEMBER_RE.search(t)) and len(m.group(1).strip()) > 2:
-        facts.append(("user", _slug(m.group(1)), m.group(1).strip()[:280], 0.7))
+        facts.append(("user", _slug(m.group(1))[:40], m.group(1).strip()[:280], 0.7))
 
     if (m := DECIDED_RE.search(t)) and len(m.group(1).strip()) > 2:
-        facts.append(("decisions", _slug(m.group(1)), m.group(1).strip()[:280], 0.75))
+        facts.append(
+            ("decisions", _slug(m.group(1))[:40], m.group(1).strip()[:280], 0.75)
+        )
 
     if FIX_RE.search(t):
-        facts.append(("learnings", _slug(t), t[:280], 0.65))
+        facts.append(("learnings", _slug(t)[:40], t[:280], 0.65))
 
     if m := PROC_EXPLICIT_RE.search(t):
         trig, steps = m.group(1).strip()[:120], m.group(2).strip()[:800]
