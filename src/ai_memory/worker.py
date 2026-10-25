@@ -69,6 +69,17 @@ def main(argv: list[str] | None = None) -> int:
                 reprocess=args.reprocess,
                 embed_fn=_vec,
             )
+            # Writers that cannot embed (plugin CLI path uses AI_MEMORY_EMBED=off
+            # for speed) leave text-only rows behind. The sleep cycle is the
+            # natural place to give them real vectors, so recall sees them.
+            if _embedder is not None:
+                from .vecfill import backfill_vecs
+
+                filled = backfill_vecs(con, _vec)
+                if any(
+                    v.get("filled") for k, v in filled.items() if k != "facts_evicted"
+                ):
+                    res["backfilled"] = filled
         finally:
             con.close()
         print(f"[consolidate] {res}", flush=True)

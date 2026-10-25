@@ -115,6 +115,12 @@ trace at `/tmp/ai-memory-hook.log`):
 - Commands: `/remember <text>` (`proc: trigger -> steps` forces procedure
   capture), `/recall <query>`, `/forget <text>`,
   `/stats`, `/consolidate --reprocess` (backfill after rule changes).
+- Embedder policy (v0.9.2): the plugin runs the CLI with `AI_MEMORY_EMBED=off`
+  because loading ST per CLI call costs ~10s and hash vectors are not comparable
+  with ST ones (cosine ~0) — they used to poison the shared index. Hook writes are
+  text-only (FTS + importance still rank them) and the consolidation worker
+  backfills real ST vectors on its next cycle. Hook recall is therefore
+  FTS/importance based until a warm local HTTP endpoint exists.
 
 Namespaces isolate projects (`AI_MEMORY_NS=work` or per-call `namespace=`); facts merge per-namespace, consolidation never leaks across, old DBs auto-migrate (`ns='default'`).
 

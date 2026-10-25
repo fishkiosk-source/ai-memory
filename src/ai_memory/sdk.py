@@ -34,16 +34,23 @@ class Memory:
         # poisons recall instead of degrading it. Non-hash providers fail closed
         # (no vectors, text-only rows) and backfill can fill them later.
         self.embed_error: str | None = None
-        try:
-            self.embedder = get_embedder(self.embed_provider, dim)
-        except Exception as e:  # noqa: BLE001 - provider load is env-dependent
-            self.embed_error = f"{type(e).__name__}: {e}"
-            if (self.embed_provider or "hash").lower() == "hash":
-                from .embeddings import HashEmbedder
+        provider = (self.embed_provider or "hash").lower()
+        if provider in ("off", "none", "null", "disabled"):
+            # explicit "write text only": fast path for hooks that must not load
+            # a 10s model per CLI call. The consolidation worker backfills ST.
+            self.embedder = None
+            self.embed_error = "disabled by AI_MEMORY_EMBED=off"
+        else:
+            try:
+                self.embedder = get_embedder(self.embed_provider, dim)
+            except Exception as e:  # noqa: BLE001 - provider load is env-dependent
+                self.embed_error = f"{type(e).__name__}: {e}"
+                if provider == "hash":
+                    from .embeddings import HashEmbedder
 
-                self.embedder = HashEmbedder(dim)
-            else:
-                self.embedder = None
+                    self.embedder = HashEmbedder(dim)
+                else:
+                    self.embedder = None
 
     @property
     def vec_enabled(self) -> bool:
@@ -383,80 +390,10 @@ class Memory:
 
     def backfill_vecs(self) -> dict:
         """Recompute vectors for rows missing from vec tables. Returns counts."""
-        from .db import vec_insert
+        from .vecfill import backfill_vecs
 
         with self._lock:
-            out = {}
-            jobs = (
-                ("episodes", "vec_episodes", lambda r: r["text"]),
-                (
-                    "facts",
-                    "vec_facts",
-                    lambda r: f"{r['entity']} {r['key']} {r['value']}",
-                ),
-                (
-                    "procedures",
-                    "vec_procedures",
-                    lambda r: (
-                        f"{r['trigger'] if 'trigger' in r.keys() else ''} {r['steps'] if 'steps' in r.keys() else ''}"
-                    ),
-                ),
-            )
-            for base, vec_tbl, text_fn in jobs:
-                try:
-                    is_fact = base == "facts"
-                    # facts: fill only active rows, evict vec slots of non-active
-                    missing = [
-                        r[0]
-                        for r in self.con.execute(
-                            f"SELECT id FROM {base} WHERE id NOT IN "
-                            f"(SELECT id FROM {vec_tbl})"
-                            + (
-                                " AND (status IS NULL OR status='active')"
-                                if is_fact
-                                else ""
-                            )
-                        ).fetchall()
-                    ]
-                    if is_fact:
-                        evicted = 0
-                        for r in self.con.execute(
-                            "SELECT id FROM vec_facts"
-                        ).fetchall():
-                            row = self.con.execute(
-                                "SELECT status FROM facts WHERE id=?", (r["id"],)
-                            ).fetchone()
-                            if row and (row["status"] or "active") != "active":
-                                vec_delete(self.con, "vec_facts", r["id"])
-                                evicted += 1
-                        out.setdefault("facts_evicted", evicted)
-                except Exception:
-                    missing = []
-                done, failed = 0, 0
-                for mid in missing:
-                    row = self.con.execute(
-                        f"SELECT * FROM {base} WHERE id=?", (mid,)
-                    ).fetchone()
-                    if row is None:
-                        continue
-                    try:
-                        vec = self._vec(text_fn(row))
-                    except Exception:
-                        vec = None
-                    if vec is None:
-                        failed += 1
-                        continue
-                    try:
-                        vec_insert(self.con, vec_tbl, mid, vec)
-                        done += 1
-                    except Exception:
-                        failed += 1
-                out[base] = {"missing": len(missing), "filled": done, "failed": failed}
-            try:
-                self.con.commit()
-            except Exception:
-                pass
-            return out
+            return backfill_vecs(self.con, self._vec)
 
     def stats(self) -> dict:
         with self._lock:
