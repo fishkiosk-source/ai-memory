@@ -1,0 +1,11 @@
+{
+  "name": "ai-memory-opencode-plugin",
+  "version": "1.0.0",
+  "description": "OpenCode plugin: automatic memory briefing, per-prompt recall, auto-capture for ai-memory",
+  "type": "module",
+  "main": "index.ts",
+  "license": "MIT",
+  "dependencies": {
+    "@opencode/plugin": "^2.0.22"
+  }
+}

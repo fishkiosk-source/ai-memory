@@ -104,8 +104,11 @@ every 30min, `maintenance` Sundays 03:00.
 
 ## OpenCode harness (plugin `ai-memory`)
 
-Global plugin at `~/.config/opencode/plugins/ai-memory` (auto-reloads on edit,
-trace at `/tmp/ai-memory-hook.log`):
+Source: `integrations/opencode/` (this repo is canonical; `./install.sh` copies
+`index.ts` into `~/.config/opencode/plugins/ai-memory`, which auto-reloads on
+edit, trace at `/tmp/ai-memory-hook.log`). Config knobs: `AI_MEMORY_PROJECT`,
+`AI_MEMORY_DB`, `AI_MEMORY_UV`, `AI_MEMORY_PLUGIN_MCP=off`,
+`AI_MEMORY_HOOK_TRACE` — see `integrations/opencode/README.md`.
 
 - First model call: project-scoped briefing (profile + decisions + procedures
   for the project namespace derived from the working directory) plus usage rules.
