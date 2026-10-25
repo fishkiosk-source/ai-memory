@@ -1,6 +1,6 @@
 # AI Memory — local-first, brain-inspired, MCP-pluggable
 
-v0.9.2 + OpenCode harness v2. See `architecture.md` for design.
+v0.9.3 + OpenCode harness v2. See `architecture.md` for design.
 
 - Hybrid recall (sqlite-vec + FTS5 + importance + recency + frequency), time-range filters, `recall@3 = 1.0` on 11-case eval
 - Consolidation worker (rules + opt-in LLM), namespaces, export/import, backup retention
