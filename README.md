@@ -1,11 +1,11 @@
 # AI Memory — local-first, brain-inspired, MCP-pluggable
 
-v0.9.1 + OpenCode harness v2. See `architecture.md` for design.
+v0.9.2 + OpenCode harness v2. See `architecture.md` for design.
 
 - Hybrid recall (sqlite-vec + FTS5 + importance + recency + frequency), time-range filters, `recall@3 = 1.0` on 11-case eval
 - Consolidation worker (rules + opt-in LLM), namespaces, export/import, backup retention
 - Safety net: `forget` soft-deletes into `trash` (30d restore), vacuum purges
-- Fact conflict policy (v0.9.1): same-key updates supersede older values, cross-key near-duplicates auto-resolve on write when confidence is comparable, `doctor facts` audits the rest
+- Fact conflict policy (v0.9.1): same-key updates supersede older values, cross-key near-duplicates auto-resolve on write when confidence is comparable, `doctor facts` audits the rest (v0.9.2: missing-vec count scoped to active rows so superseded facts stop being reported as repairable)
 - Procedure farming (v0.9.0): multi-item mining (session wraps, `(1)`-style parenthetical bullets), semantic dedupe (sim ≥ 0.90 merges, bumps `uses`)
 - OpenCode harness: project-scoped briefing, per-prompt recall, auto-capture on idle, `/remember /recall /forget /stats /consolidate`
 

@@ -106,10 +106,12 @@ def fact_audit(
             vec_ids = {
                 r["id"] for r in con.execute("SELECT id FROM vec_facts").fetchall()
             }
+            # only active rows: backfill_vecs deliberately skips superseded
+            # facts (T1.3), so counting them would be a permanent false alarm
             missing_vec = [
                 r["id"]
-                for r in con.execute("SELECT id FROM facts").fetchall()
-                if r["id"] not in vec_ids
+                for r in con.execute("SELECT id,status FROM facts").fetchall()
+                if r["id"] not in vec_ids and _is_active(r["status"])
             ]
     except Exception:
         pass

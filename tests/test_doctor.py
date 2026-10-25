@@ -84,6 +84,26 @@ def test_doctor_missing_vec_rows(tmp_path):
     assert len(out["missing_vec_rows"]) == 1
 
 
+def test_doctor_ignores_superseded_rows_in_missing_vec(tmp_path):
+    # v0.9.1 T1.3: superseded facts lose their vec slot by design, and
+    # backfill_vecs only refills active rows -> doctor must not cry wolf forever
+    con, emb = _setup(tmp_path)
+    old = S.store_fact(
+        con, "user", "editor", "editor is nvim", vec=emb.embed("user editor is nvim")
+    )
+    S.store_fact(
+        con, "user", "editor", "editor is helix", vec=emb.embed("user editor is helix")
+    )
+    assert (
+        con.execute("SELECT status FROM facts WHERE id=?", (old,)).fetchone()["status"]
+        == "superseded"
+    )
+    out = doctor.fact_audit(con, embed_fn=emb.embed)
+    assert out["missing_vec_rows"] == []
+    assert out["dead_vec_slots"] == []
+    assert "missing vec rows" not in doctor.audit_report(out)
+
+
 def test_doctor_namespace_filter(tmp_path):
     con, emb = _setup(tmp_path)
     S.store_fact(
