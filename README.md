@@ -169,3 +169,20 @@ VACUUM + reclaim report) or the `memory_maintenance` MCP tool.
   "env": {"AI_MEMORY_EMBED": "st", "AI_MEMORY_DB": "/home/llm/ai-memory/memory.db"}
 } } }
 ```
+
+### Reloading the MCP server (v0.9.2)
+
+OpenCode does not retry an MCP server after its stdio child dies: the connection
+stays `failed` until something calls the reconnect endpoint. After changing
+server code, use the helper instead of a bare `kill`:
+
+```bash
+scripts/mcp-reload.sh              # kill ai-memory-mcp children + reconnect
+scripts/mcp-reload.sh --no-kill    # reconnect only (child died on its own)
+scripts/mcp-reload.sh --dry-run    # show what would be killed
+```
+
+It reads `OPENCODE_SERVER_PASSWORD` from the `opencode serve` process env, POSTs
+`/api/experimental/mcp/<name>/connect`, and polls until `connected` (ST cold load
+is ~10-20s). Only descendants of the HTTP server are killed, so an
+`opencode serve --service` instance (no HTTP port) keeps its connection.
