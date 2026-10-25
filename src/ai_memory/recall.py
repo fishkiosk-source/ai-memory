@@ -118,8 +118,13 @@ def recall(
     if mq:
         for tbl, store in (("episodes_fts", "episode"), ("facts_fts", "fact")):
             try:
+                # ORDER BY bm25: without it FTS5 returns rows in rowid order, so
+                # rank 0 went to the OLDEST matching row and the fts_norm boost
+                # systematically punished newer (more relevant) writes.
                 rows = con.execute(
-                    f"SELECT id FROM {tbl} WHERE {tbl} MATCH ? LIMIT 50", (mq,)
+                    f"SELECT id FROM {tbl} WHERE {tbl} MATCH ? "
+                    f"ORDER BY bm25({tbl}) LIMIT 50",
+                    (mq,),
                 ).fetchall()
                 for rank, r in enumerate(rows):
                     key = (store, r["id"])

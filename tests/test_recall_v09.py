@@ -83,3 +83,23 @@ def test_maintenance_prunes_access_log(tmp_path):
     out = m.maintenance()
     left = m.con.execute("SELECT COUNT(*) FROM access_log").fetchone()[0]
     assert left == 0, (out, left)
+
+
+def test_fts_rank_uses_relevance_not_insertion_order(tmp_path):
+    # v0.9.2: FTS query lacked ORDER BY bm25(), so rank 0 was the OLDEST row and
+    # a brand-new exact match landed last in the FTS component (0.056 vs 1.0).
+    from ai_memory import db as DB
+    from ai_memory import recall as R
+    from ai_memory import store as S
+
+    con = DB.connect(str(tmp_path / "fts.db"), dim=64)
+    weak = S.store_fact(con, "project", "notes", "mcp server mentioned in passing")
+    strong = S.store_fact(
+        con,
+        "project",
+        "mcp.reload",
+        "mcp reload script for server code editing after changes",
+    )
+    hits = R.recall(con, "mcp reload script server code editing", 5)
+    assert hits[0].ref_id == strong
+    assert {h.ref_id for h in hits} == {weak, strong}
