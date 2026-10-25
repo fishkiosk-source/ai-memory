@@ -390,13 +390,32 @@ class Memory:
             )
             for base, vec_tbl, text_fn in jobs:
                 try:
+                    is_fact = base == "facts"
+                    # facts: fill only active rows, evict vec slots of non-active
                     missing = [
                         r[0]
                         for r in self.con.execute(
                             f"SELECT id FROM {base} WHERE id NOT IN "
                             f"(SELECT id FROM {vec_tbl})"
+                            + (
+                                " AND (status IS NULL OR status='active')"
+                                if is_fact
+                                else ""
+                            )
                         ).fetchall()
                     ]
+                    if is_fact:
+                        evicted = 0
+                        for r in self.con.execute(
+                            "SELECT id FROM vec_facts"
+                        ).fetchall():
+                            row = self.con.execute(
+                                "SELECT status FROM facts WHERE id=?", (r["id"],)
+                            ).fetchone()
+                            if row and (row["status"] or "active") != "active":
+                                vec_delete(self.con, "vec_facts", r["id"])
+                                evicted += 1
+                        out.setdefault("facts_evicted", evicted)
                 except Exception:
                     missing = []
                 done, failed = 0, 0
@@ -455,3 +474,24 @@ class Memory:
                 namespace=namespace,
                 sim_threshold=sim_threshold,
             )
+
+    def supersede_fact(self, old_ref_id: str, new_ref_id: str) -> dict:
+        """Owner verdict: mark old fact superseded by new, drop dead slots."""
+        with self._lock:
+            from .store import _is_active, _supersede_row
+
+            for rtid in (old_ref_id, new_ref_id):
+                r = self.con.execute(
+                    "SELECT id,status FROM facts WHERE id=?", (rtid,)
+                ).fetchone()
+                if r is None:
+                    raise ValueError(f"fact {rtid} not found")
+                if rtid == old_ref_id and not _is_active(r["status"]):
+                    raise ValueError(f"fact {rtid} already not active")
+                if rtid == new_ref_id and not _is_active(r["status"]):
+                    raise ValueError(f"replacement {rtid} must be active")
+            if old_ref_id == new_ref_id:
+                raise ValueError("cannot supersede a fact with itself")
+            _supersede_row(self.con, old_ref_id, new_ref_id)
+            self.con.commit()
+            return {"superseded": old_ref_id, "by": new_ref_id}

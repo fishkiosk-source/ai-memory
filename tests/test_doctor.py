@@ -30,7 +30,7 @@ def test_doctor_flags_cross_key_conflict(tmp_path):
         "user",
         "dial_size",
         "prefers radius 40 for dial",
-        vec=emb.embed("user dial_size prefers radius 40 for dial"),
+        vec=None,  # offline path: semantic check can't fire, doctor still spots pair
     )
     out = doctor.fact_audit(con, embed_fn=emb.embed)
     assert len(out["conflicts"]) == 1
@@ -63,11 +63,18 @@ def test_doctor_dead_slots_from_supersede(tmp_path):
     S.store_fact(
         con, "user", "editor", "editor is helix", vec=emb.embed("user editor is helix")
     )
-    # old row now superseded but still holds fts + vec entries (known leak)
+    # T1.3: supersede now CLEANS old fts/vec slots; doctor must see zero dead
     out = doctor.fact_audit(con, embed_fn=emb.embed)
     assert out["superseded"] == 1
-    assert len(out["dead_fts_slots"]) == 1
-    assert len(out["dead_vec_slots"]) == 1
+    assert out["dead_fts_slots"] == []
+    assert out["dead_vec_slots"] == []
+    # doctor still DETECTS manually-created dead slots (ghost index rows)
+    con.execute(
+        "INSERT INTO facts_fts(id,entity,key,value) VALUES('ghost','u','k','v')"
+    )
+    con.commit()
+    out2 = doctor.fact_audit(con, embed_fn=emb.embed)
+    assert "ghost" in out2["dead_fts_slots"]
 
 
 def test_doctor_missing_vec_rows(tmp_path):

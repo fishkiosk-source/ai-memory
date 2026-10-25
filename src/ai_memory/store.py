@@ -7,11 +7,22 @@ import sqlite3
 import time
 
 from . import salience
-from .db import vec_insert, vec_delete  # noqa: F401 (re-export for sdk.forget)
+from .db import has_vec, vec_delete, vec_insert, vec_search  # noqa: F401 (re-export)
 
 
 def _nid(prefix: str = "mem") -> str:
     return f"{prefix}_{int(time.time() * 1000):x}_{random.randint(0, 0xFFFF):04x}"
+
+
+# Semantic thresholds (T1.2/T2.4, plan.md). Need vecs; hash embedder works too,
+# it just splits differently — thresholds are on cosine sim of stored vecs.
+SEMANTIC_SUPERSEDE_SIM = 0.88  # same entity+ns, different key: new fact wins
+SEMANTIC_CONF_WINDOW = 0.10  # new confidence must be >= old - window to win
+PROC_MERGE_SIM = 0.90  # procedure near-duplicate trigger+steps → merge
+
+
+def _is_active(status: str | None) -> bool:
+    return (status or "active") == "active"
 
 
 # Working memory is short-lived (session context). Drop trivia older than this so
@@ -41,6 +52,45 @@ def store_episode(
     return mid
 
 
+def _nearest_other_fact(
+    con: sqlite3.Connection,
+    qvec: list[float] | None,
+    entity: str,
+    key: str,
+    namespace: str,
+) -> tuple[sqlite3.Row | None, float]:
+    """Nearest ACTIVE fact with same entity+ns but a DIFFERENT key.
+
+    Same-key rows are handled by the caller (reinforce/supersede path); this is
+    the cross-key collision check. Vec-unavailable or no qvec → (None, 0.0).
+    """
+    if not qvec or not has_vec(con):
+        return None, 0.0
+    try:
+        for ref_id, dist in vec_search(con, "vec_facts", qvec, limit=8):
+            row = con.execute("SELECT * FROM facts WHERE id=?", (ref_id,)).fetchone()
+            if row is None or not _is_active(row["status"]):
+                continue
+            if (row["ns"] or "default") != namespace or row["entity"] != entity:
+                continue
+            if row["key"] == key:
+                continue
+            return row, max(0.0, 1.0 - dist)
+    except Exception:
+        pass
+    return None, 0.0
+
+
+def _supersede_row(con: sqlite3.Connection, old_id: str, new_id: str) -> None:
+    """Mark old row superseded and drop its index slots (T1.3 hygiene)."""
+    con.execute(
+        "UPDATE facts SET status='superseded', superseded_by=? WHERE id=?",
+        (new_id, old_id),
+    )
+    con.execute("DELETE FROM facts_fts WHERE id=?", (old_id,))
+    vec_delete(con, "vec_facts", old_id)
+
+
 def store_fact(
     con: sqlite3.Connection,
     entity: str,
@@ -60,6 +110,18 @@ def store_fact(
         (entity, key, namespace),
     ).fetchone()
     mid = _nid("fact")
+    dup_row = None
+    if row is None:
+        # semantic collision check (T1.2): near-duplicate of an existing fact
+        # under a different key. Auto-supersede only when confidence is
+        # comparable; otherwise both stay active (doctor reports the pair).
+        cand, sim = _nearest_other_fact(con, vec, entity, key, namespace)
+        if (
+            cand is not None
+            and sim >= SEMANTIC_SUPERSEDE_SIM
+            and confidence >= float(cand["confidence"] or 0.8) - SEMANTIC_CONF_WINDOW
+        ):
+            dup_row = cand
     if row:  # merge/invalidate = cortical consolidation (per-namespace)
         old_src = json.loads(row["source_episodes"] or "[]")
         merged = sorted(set(old_src) | set(source_episodes))
@@ -77,15 +139,14 @@ def store_fact(
             con.commit()
             return row["id"]
         # same key + new value: invalidate old active fact, insert new active row
-        con.execute(
-            "UPDATE facts SET status='superseded', superseded_by=? WHERE id=? AND status='active'",
-            (mid, row["id"]),
-        )
+        _supersede_row(con, row["id"], mid)
         con.execute(
             "INSERT INTO facts_fts(id,entity,key,value) VALUES(?,?,?,?)",
             (mid, entity, key, value),
         )
     else:
+        if dup_row is not None:
+            _supersede_row(con, dup_row["id"], mid)
         con.execute(
             "INSERT INTO facts_fts(id,entity,key,value) VALUES(?,?,?,?)",
             (mid, entity, key, value),
@@ -124,12 +185,29 @@ def store_procedure(
         "SELECT id, uses FROM procedures WHERE trigger=? AND ns=?",
         (trigger, namespace),
     ).fetchone()
-    if row:  # dedupe: same trigger+ns updates steps, reinforces uses
+    merged = False
+    if row is None and vec and has_vec(con):
+        # semantic dedupe (T2.4): near-identical procedure under a different
+        # trigger phrasing merges into the existing row instead of multiplying
+        try:
+            for ref_id, dist in vec_search(con, "vec_procedures", vec, limit=5):
+                prow = con.execute(
+                    "SELECT id, ns FROM procedures WHERE id=?", (ref_id,)
+                ).fetchone()
+                if prow is None or (prow["ns"] or "default") != namespace:
+                    continue
+                if 1.0 - dist >= PROC_MERGE_SIM:
+                    row = prow
+                    merged = True
+                    break
+        except Exception:
+            pass
+    if row:  # exact or semantic dedupe: update steps, reinforce uses
         con.execute(
             "UPDATE procedures SET steps=?, updated=?, uses=COALESCE(uses,1)+1 WHERE id=?",
             (steps, time.time(), row["id"]),
         )
-        if vec is not None:
+        if vec is not None or merged:
             vec_insert(con, "vec_procedures", row["id"], vec)
         con.commit()
         return row["id"]

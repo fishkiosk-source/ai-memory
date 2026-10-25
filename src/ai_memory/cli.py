@@ -99,6 +99,10 @@ def main(argv: list[str] | None = None) -> int:
     p_doc.add_argument("--namespace", default=None)
     p_doc.add_argument("--sim", type=float, default=0.85)
 
+    p = sub.add_parser("supersede", help="mark old fact superseded by new fact id")
+    p.add_argument("--old", required=True)
+    p.add_argument("--new", required=True)
+
     sub.add_parser("backfill-vecs", help="recompute missing vec rows")
 
     args = ap.parse_args(argv)
@@ -152,6 +156,8 @@ def main(argv: list[str] | None = None) -> int:
                 m.doctor_facts(namespace=args.namespace, sim_threshold=args.sim)
             )
         )
+    elif args.cmd == "supersede":
+        print(m.supersede_fact(args.old, args.new))
     elif args.cmd == "backfill-vecs":
         print(m.backfill_vecs())
     return 0

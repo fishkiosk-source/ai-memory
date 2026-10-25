@@ -14,6 +14,11 @@ def _is_active(status: str | None) -> bool:
     return (status or "active") == "active"
 
 
+def _dead_slot(status: str | None) -> bool:
+    """Index entry is dead when its base row is gone OR not active."""
+    return status is None or not _is_active(status)
+
+
 def fact_audit(
     con: sqlite3.Connection,
     embed_fn=None,
@@ -87,7 +92,7 @@ def fact_audit(
     dead_fts = [
         r["id"]
         for r in con.execute("SELECT id FROM facts_fts").fetchall()
-        if not _is_active(fact_status.get(r["id"]))
+        if _dead_slot(fact_status.get(r["id"]))
     ]
     dead_vec: list[str] = []
     missing_vec: list[str] = []
@@ -96,7 +101,7 @@ def fact_audit(
 
         if has_vec(con):
             for r in con.execute("SELECT id FROM vec_facts").fetchall():
-                if not _is_active(fact_status.get(r["id"])):
+                if _dead_slot(fact_status.get(r["id"])):
                     dead_vec.append(r["id"])
             vec_ids = {
                 r["id"] for r in con.execute("SELECT id FROM vec_facts").fetchall()
