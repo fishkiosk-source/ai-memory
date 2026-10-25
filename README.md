@@ -7,6 +7,7 @@ v0.9.2 + OpenCode harness v2. See `architecture.md` for design.
 - Safety net: `forget` soft-deletes into `trash` (30d restore), vacuum purges
 - Fact conflict policy (v0.9.1): same-key updates supersede older values, cross-key near-duplicates auto-resolve on write when confidence is comparable, `doctor facts` audits the rest (v0.9.2: missing-vec count scoped to active rows so superseded facts stop being reported as repairable)
 - Procedure farming (v0.9.0): multi-item mining (session wraps, `(1)`-style parenthetical bullets), semantic dedupe (sim ≥ 0.90 merges, bumps `uses`)
+- Embedder safety (v0.9.2): `AI_MEMORY_EMBED` is read per-instance, and a failed non-hash embedder fails closed (text-only rows) instead of silently writing hash vectors into an ST index
 - OpenCode harness: project-scoped briefing, per-prompt recall, auto-capture on idle, `/remember /recall /forget /stats /consolidate`
 
 ## Quickstart (offline, hash embedder)

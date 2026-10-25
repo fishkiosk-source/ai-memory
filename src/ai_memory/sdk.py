@@ -15,29 +15,43 @@ class Memory:
     def __init__(
         self,
         db_path: str | None = None,
-        embed_provider: str = "hash",
+        embed_provider: str | None = None,
         dim: int = DIM_DEFAULT,
         namespace: str | None = None,
     ):
         cfg = Config()
         self.db_path = db_path or cfg.db_path
         self.dim = dim
-        self.embed_provider = embed_provider
+        # None means "whatever AI_MEMORY_EMBED says": hardcoding "hash" here made
+        # SDK/CLI callers silently write hash vectors into an ST database, and
+        # cross-embedder cosines are ~0, so those rows never match semantically.
+        self.embed_provider = embed_provider or cfg.embed_provider
         self.namespace = namespace or cfg.namespace
         self._lock = threading.RLock()
         self.con: sqlite3.Connection = connect(self.db_path, dim=dim)
+        # A failed embedder must NOT silently become hash: hash vectors are not
+        # comparable with ST ones (cosine ~0), so writing them into an ST index
+        # poisons recall instead of degrading it. Non-hash providers fail closed
+        # (no vectors, text-only rows) and backfill can fill them later.
+        self.embed_error: str | None = None
         try:
-            self.embedder = get_embedder(embed_provider, dim)
-        except Exception:
-            from .embeddings import HashEmbedder
+            self.embedder = get_embedder(self.embed_provider, dim)
+        except Exception as e:  # noqa: BLE001 - provider load is env-dependent
+            self.embed_error = f"{type(e).__name__}: {e}"
+            if (self.embed_provider or "hash").lower() == "hash":
+                from .embeddings import HashEmbedder
 
-            self.embedder = HashEmbedder(dim)
+                self.embedder = HashEmbedder(dim)
+            else:
+                self.embedder = None
 
     @property
     def vec_enabled(self) -> bool:
         return has_vec(self.con) and self.embedder is not None
 
     def _vec(self, text: str) -> list[float] | None:
+        if self.embedder is None:
+            return None
         try:
             v = self.embedder.embed(text)
             if v is not None and len(v) == self.dim:

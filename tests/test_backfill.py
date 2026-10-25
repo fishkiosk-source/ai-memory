@@ -49,3 +49,24 @@ def test_worker_wires_embed_fn():
     res = C.run_once(con, limit=10, embed_fn=fake_embed)
     assert got.get("called"), "embed_fn was not used by run_once"
     assert res["facts_made"] >= 1, res
+
+
+def test_memory_honors_env_embed_provider(tmp_path, monkeypatch):
+    # regression: Memory(embed_provider="hash") as a hard default meant
+    # AI_MEMORY_EMBED=st was ignored by SDK/CLI callers -> hash vectors landed
+    # in an ST index and cosine vs ST queries was ~0
+    monkeypatch.setenv("AI_MEMORY_EMBED", "hash")
+    from ai_memory.sdk import Memory
+
+    m = Memory(db_path=str(tmp_path / "env.db"))
+    assert m.embed_provider == "hash"
+    assert type(m.embedder).__name__ == "HashEmbedder"
+
+
+def test_config_reads_env_at_instantiation(monkeypatch):
+    from ai_memory.config import Config
+
+    monkeypatch.setenv("AI_MEMORY_NS", "runtime-ns")
+    assert Config().namespace == "runtime-ns"
+    monkeypatch.setenv("AI_MEMORY_NS", "other")
+    assert Config().namespace == "other"
