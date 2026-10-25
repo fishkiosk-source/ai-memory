@@ -66,6 +66,10 @@ warm child handshook successfully.
 
 ## Caveats
 
+- The plugin targets the OpenCode plugin API v2 (`@opencode/plugin` ^2.0.22):
+  `ctx.session.hook`, `ctx.command.transform`, `ctx.storage`, `ctx.event`.
+  Hook names are not part of ai-memory, so a major OpenCode plugin API change
+  breaks this file, not the server.
 - One child per OpenCode server process (~850MB RSS with the ST model). Running
   several OpenCode servers means several children; that is expected.
 - The child is restarted at most 3 times, then the plugin waits 5 minutes before
