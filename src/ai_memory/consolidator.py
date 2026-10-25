@@ -95,6 +95,44 @@ def _trigger_before(text: str, pos: int, fallback: str = "") -> str:
     return frag.strip(" :-,")
 
 
+PAREN_RE = re.compile(r"\((\d{1,2})\)\s+")
+PROC_CAP = 6  # max procedures mined from a single episode
+
+
+def _paren_items(text: str) -> list[tuple[int, str]]:
+    """(1)-style sequences, inline or per line. Returns [(num, item_text)] when
+    the numbers form a contiguous ascending sequence starting at (1) and every
+    item body is >=20 chars. This is the exact shape of real session-wrap
+    summaries ("(1) fixed X ... (2) then Y ..."), which NUMBERED_LIST_RE
+    (newline + digit/./) misses."""
+    matches = list(PAREN_RE.finditer(text))
+    if len(matches) < 2:
+        return []
+    nums = [int(m.group(1)) for m in matches]
+    if nums != list(range(1, len(nums) + 1)):
+        return []
+    items: list[tuple[int, str]] = []
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        body = text[m.end() : end].strip()
+        if len(body) < 20:
+            return []
+        items.append((i + 1, body[:400]))
+    return items
+
+
+def _dedupe_procs(procs: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """First occurrence wins; keyed on trigger head + steps head."""
+    seen, out = set(), []
+    for trigger, steps in procs:
+        k = (trigger.strip().lower()[:60], steps.strip().lower()[:60])
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append((trigger, steps))
+    return out
+
+
 def extract(text: str) -> dict:
     """Return {'facts': [(entity,key,value,conf)], 'procedures': [(trigger,steps)]}."""
     facts, procs = [], []
@@ -129,28 +167,46 @@ def extract(text: str) -> dict:
             procs.append((trig, steps))
             return {"facts": facts, "procedures": procs}
 
+    # --- procedures: patterns may each contribute; T2.1 allows multiple per
+    # episode (old rule first-match-wins so a 4-item wrap yielded 1 proc).
+    # Extraction contributes two patterns:
+    # - RUNBOOK
+    # - (1)-style wrap items
+    # which are numbered steps lists as bullets
     if m := RUNBOOK_RE.search(t):
         trigger = _trigger_before(t, m.start(), _slug(t).replace("_", " "))
         procs.append((trigger, m.group(1).strip()))
-    if not procs:
-        m = NUMBERED_LIST_RE.search(t)
+
+    paren_hits = _paren_items(t)
+    if paren_hits:
+        # trigger: text right before the first "(1)" if useful, else "wrap items"
+        first_pos = t.find("(1)")
+        trigger = _trigger_before(t, first_pos, "wrap items")
+        for n, body in paren_hits:
+            procs.append((f"{trigger} (part {n})"[:120], body))
+
+    m = NUMBERED_LIST_RE.search(t)
+    if m:
+        trigger = _trigger_before(t, m.start(), "numbered steps")
+        procs.append((trigger, m.group(0).strip()[:400]))
+    elif not paren_hits:
+        m = FIRST_THEN_RE.search(t)
         if m:
-            trigger = _trigger_before(t, m.start(), "numbered steps")
-            procs.append((trigger, m.group(0).strip()[:400]))
-        elif m := FIRST_THEN_RE.search(t):
             trigger = _trigger_before(t, m.start(), "first-then chain")
             procs.append((trigger, m.group(0).strip()[:400]))
-        elif m := HOWTO_RE.search(t):
-            procs.append(
-                (f"how to {m.group(1).strip()}"[:120], m.group(2).strip()[:400])
-            )
-    if not procs and (m := FIX_WITH_RE.search(t)):
+        else:
+            m = HOWTO_RE.search(t)
+            if m:
+                procs.append(
+                    (f"how to {m.group(1).strip()}"[:120], m.group(2).strip()[:400])
+                )
+    if m := FIX_WITH_RE.search(t):
         trigger = f"fix {m.group(1).strip()}"[:120]
         procs.append((trigger, m.group(2).strip()[:400]))
-    if not procs and (m := GOTCHA_RE.search(t)):
+    if (m := GOTCHA_RE.search(t)) and not procs:
         trigger = f"{m.group(1).strip()}"[:120]
         procs.append((trigger, f"{m.group(2)} {m.group(3)}".strip()[:400]))
-    if not procs and (m := NEXT_RE.search(t)):
+    if m := NEXT_RE.search(t):
         steps = m.group(1).strip()[:400]
         trigger = _trigger_before(t, m.start(), "")
         if len(trigger) < 4 or trigger == "next steps":
@@ -158,12 +214,14 @@ def extract(text: str) -> dict:
             # so distinct follow-ups don't collapse into one deduped row.
             trigger = f"next: {steps[:60]}".strip()
         procs.append((trigger[:120], steps))
-    if not procs and (m := IMPERATIVE_SEQ_RE.search(t)):
+    if (m := IMPERATIVE_SEQ_RE.search(t)) and not procs:
         trigger = _trigger_before(t, m.start(), "command sequence")
         procs.append((trigger, m.group(0).strip()[:400]))
-    if not procs and (m := SHELL_SEQ_RE.search(t)):
+    if (m := SHELL_SEQ_RE.search(t)) and not procs:
         trigger = _trigger_before(t, m.start(), "shell sequence")
         procs.append((trigger, m.group(0).strip()[:400]))
+
+    procs = _dedupe_procs(procs)[:PROC_CAP]
     return {"facts": facts, "procedures": procs}
 
 

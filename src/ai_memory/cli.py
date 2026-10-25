@@ -91,6 +91,14 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("stats", help="print counts")
 
+    p = sub.add_parser("doctor", help="read-only diagnostics")
+    sub_doc = p.add_subparsers(dest="doctor_cmd", required=True)
+    p_doc = sub_doc.add_parser(
+        "facts", help="fact conflicts, dead slots, vec completeness"
+    )
+    p_doc.add_argument("--namespace", default=None)
+    p_doc.add_argument("--sim", type=float, default=0.85)
+
     sub.add_parser("backfill-vecs", help="recompute missing vec rows")
 
     args = ap.parse_args(argv)
@@ -136,6 +144,14 @@ def main(argv: list[str] | None = None) -> int:
         print(m.temporal(hours=args.hours))
     elif args.cmd == "stats":
         print(m.stats())
+    elif args.cmd == "doctor" and args.doctor_cmd == "facts":
+        from .doctor import audit_report
+
+        print(
+            audit_report(
+                m.doctor_facts(namespace=args.namespace, sim_threshold=args.sim)
+            )
+        )
     elif args.cmd == "backfill-vecs":
         print(m.backfill_vecs())
     return 0

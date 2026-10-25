@@ -441,3 +441,17 @@ class Memory:
             }
             d.update(vec_counts(self.con))
             return d
+
+    def doctor_facts(
+        self, namespace: str | None = None, sim_threshold: float = 0.85
+    ) -> dict:
+        """Read-only fact audit (see doctor.py)."""
+        from .doctor import fact_audit
+
+        with self._lock:
+            return fact_audit(
+                self.con,
+                embed_fn=self._vec,
+                namespace=namespace,
+                sim_threshold=sim_threshold,
+            )
