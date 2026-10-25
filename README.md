@@ -1,5 +1,7 @@
 # ai-memory
 
+[![ci](https://github.com/fishkiosk-source/ai-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/fishkiosk-source/ai-memory/actions/workflows/ci.yml)
+
 Long-term memory for AI agents that you own and can inspect. One SQLite file,
 local embeddings, an MCP server, and a CLI. No cloud, no account, no vector
 database to run.
@@ -22,7 +24,8 @@ part back on the next prompt instead of re-reading a transcript.
   instead of writing incomparable vectors into an existing index.
 
 Python 3.10+, SQLite, single-user scale (thousands of rows is the comfortable
-range). See [`architecture.md`](architecture.md) for the design.
+range). See [`architecture.md`](architecture.md) for the design and
+[`docs/plan.md`](docs/plan.md) for the roadmap and open items.
 
 ## Install
 
@@ -240,6 +243,10 @@ The suite covers the write semantics (supersede, reinforce, cross-key conflict),
 recall ranking, extraction rules, the consolidation worker, portability,
 backfill, the doctor audit, and a real MCP stdio round trip
 (`tests/test_mcp_stdio.py`).
+
+CI runs the same suite with `AI_MEMORY_EMBED=hash` (offline, no model download)
+plus a CLI smoke test on a fresh `uv sync --locked`; the `st` path is the same
+suite run locally.
 
 ## Changelog
 

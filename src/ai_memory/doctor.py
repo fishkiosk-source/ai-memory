@@ -1,4 +1,4 @@
-"""Read-only diagnostics: fact audit, dead-slot report (T1.1, see plan.md).
+"""Read-only diagnostics: fact audit, dead-slot report (T1.1, see docs/plan.md).
 
 Never mutates. Reuses the SDK embedder so thresholds are comparable across
 runners: same FactSet must audit identically under hash vs ST.

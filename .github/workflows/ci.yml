@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (hash, offline)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      # --locked fails if uv.lock is out of date with pyproject.toml, so this
+      # also guards against lockfile rot for anyone cloning the repo.
+      - name: Sync (locked)
+        run: uv sync --locked --python 3.12
+
+      # Hash embedder: no model download, no network. Covers write semantics,
+      # ranking, extraction, consolidation, portability, doctor, and a real MCP
+      # stdio round trip. The `st` path is exercised locally (same suite).
+      - name: Tests
+        run: uv run pytest -q
+        env:
+          AI_MEMORY_EMBED: hash
+
+      - name: CLI smoke test
+        run: |
+          set -euo pipefail
+          export AI_MEMORY_DB="$RUNNER_TEMP/smoke.db" AI_MEMORY_EMBED=hash
+          uv run ai-memory store "ci smoke: fresh clone can write and read" --kind episode
+          uv run ai-memory recall "fresh clone" -k 1
+          uv run ai-memory stats
+          uv run ai-memory doctor facts

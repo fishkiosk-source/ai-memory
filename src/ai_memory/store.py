@@ -14,7 +14,7 @@ def _nid(prefix: str = "mem") -> str:
     return f"{prefix}_{int(time.time() * 1000):x}_{random.randint(0, 0xFFFF):04x}"
 
 
-# Semantic thresholds (T1.2/T2.4, plan.md). Need vecs; hash embedder works too,
+# Semantic thresholds (T1.2/T2.4, docs/plan.md). Need vecs; hash embedder works too,
 # it just splits differently — thresholds are on cosine sim of stored vecs.
 SEMANTIC_SUPERSEDE_SIM = 0.88  # same entity+ns, different key: new fact wins
 SEMANTIC_CONF_WINDOW = 0.10  # new confidence must be >= old - window to win
