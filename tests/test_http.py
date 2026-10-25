@@ -85,6 +85,8 @@ def test_http_tools_and_roundtrip(server):
                 "memory_stats",
                 "memory_maintenance",
                 "memory_backfill_vecs",
+                "memory_doctor_facts",
+                "memory_supersede",
             }, [t.name for t in tools]
             r = await c.call_tool(
                 "memory_store", {"text": "HTTP test: deploy freeze on Fridays"}

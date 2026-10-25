@@ -108,6 +108,18 @@ try:
         """Recompute vectors for rows missing from vec tables. Returns counts."""
         return mem.backfill_vecs()
 
+    @mcp.tool()
+    def memory_doctor_facts(
+        namespace: str | None = None, sim_threshold: float = 0.85
+    ) -> dict:
+        """Read-only fact audit: cross-key conflicts, same-key dupes, dead index slots, missing vec rows."""
+        return mem.doctor_facts(namespace=namespace, sim_threshold=sim_threshold)
+
+    @mcp.tool()
+    def memory_supersede(old_ref_id: str, new_ref_id: str) -> dict:
+        """Mark old active fact superseded by new active fact (drops old index slots). Returns verdict."""
+        return mem.supersede_fact(old_ref_id, new_ref_id)
+
 except Exception:  # fastmcp not installed: SDK still works
     mcp = None
 

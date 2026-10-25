@@ -1,10 +1,12 @@
 # AI Memory — local-first, brain-inspired, MCP-pluggable
 
-v0.9 + OpenCode harness v2. See `architecture.md` for design.
+v0.9.1 + OpenCode harness v2. See `architecture.md` for design.
 
 - Hybrid recall (sqlite-vec + FTS5 + importance + recency + frequency), time-range filters, `recall@3 = 1.0` on 11-case eval
 - Consolidation worker (rules + opt-in LLM), namespaces, export/import, backup retention
 - Safety net: `forget` soft-deletes into `trash` (30d restore), vacuum purges
+- Fact conflict policy (v0.9.1): same-key updates supersede older values, cross-key near-duplicates auto-resolve on write when confidence is comparable, `doctor facts` audits the rest
+- Procedure farming (v0.9.0): multi-item mining (session wraps, `(1)`-style parenthetical bullets), semantic dedupe (sim ≥ 0.90 merges, bumps `uses`)
 - OpenCode harness: project-scoped briefing, per-prompt recall, auto-capture on idle, `/remember /recall /forget /stats /consolidate`
 
 ## Quickstart (offline, hash embedder)
@@ -44,10 +46,42 @@ uv run ai-memory-consolidate                 # one pass
 uv run ai-memory-consolidate --loop --interval 300 --vacuum   # daemon
 ```
 
-Distills unprocessed episodes → facts (`user.*`, `decisions.*`, `learnings.*`) + procedures, merges same-key updates, decays trivia, vacuums old junk (FTS + vec index kept consistent).
-Procedures mine `Fixed X with Y`, `Next:/Remaining:` follow-ups, `gotcha ... so run Y`,
+Distills unprocessed episodes → facts (`user.*`, `decisions.*`, `learnings.*`)
++ procedures, merges same-key updates, decays trivia, vacuums old junk (FTS +
+vec index kept consistent). Session wraps mine up to 6 procedures per episode:
+numbered lists, `(1)`-style parenthetical items (`(part N)` triggers),
+`Fixed X with/by Y`, `Next:/Remaining:` follow-ups, `gotcha ... so run Y`,
 and explicit `proc: trigger -> steps` (also routable via `store(kind=procedure)`).
-`--reprocess` re-extracts already-processed episodes after rule changes.
+Procedures near-duplicate an existing trigger semantically (vec sim ≥ 0.90) →
+merged into that row, `uses` bumped (adds no junk rows on repeat sessions).
+`--reprocess` re-extracts already-processed episodes after rule changes
+(v0.9.0 backfill: 12 → 44 procedures from 78 episodes, zero LLM calls).
+
+## Fact conflict policy (write path)
+
+Same `(entity, key, ns)`  → reinforce (conf +0.05) or supersede (new value
+wins, old row `status='superseded'`, old FTS/vec slots dropped immediately).
+Cross-key near-duplicate (vec sim ≥ 0.88, same entity+ns, new confidence
+within −0.10 of old) → auto-supersede on write. Runs only when both rows
+have vectors; no vec → plain insert (offline behavior unchanged). Anything
+between 0.85–0.88 stays visible for `doctor`.
+
+## Facts doctor + explicit verdicts
+
+```bash
+uv run ai-memory --embed st doctor facts     # read-only audit
+uv run ai-memory supersede --old fact_abc --new fact_def   # owner verdict
+```
+
+`doctor facts` reports: cross-key conflicts (same entity+ns, sim ≥ threshold,
+different keys), same-key double-actives, dead FTS/vec slots (incl. ghost
+index rows), active facts missing vectors. It never mutates. `supersede`
+marks the old fact `superseded` with `superseded_by`, drops its index slots
+(tiny, restorable only via trash if ever deleted — supersede is semantic, not
+a deletion, and values remain in the audit trail). MCP: `memory_doctor_facts`,
+`memory_supersede`. Reports include superseded rows still holding slots;
+`backfill-vecs` fills missing vectors for ACTIVE rows only and evicts vec
+slots of superseded ones.
 
 ## Portability + namespaces
 

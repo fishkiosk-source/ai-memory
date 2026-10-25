@@ -144,11 +144,44 @@ freq = log1p(access_count)/log1p(20), capped at 1 (saturates ~20 accesses)
 
 **Consolidator (PFC during sleep):**
 1. fetch `episodes WHERE processed=0 LIMIT 50`
-2. extract `facts/procedures` (regex rules; LLM hook optional via `AI_MEMORY_LLM`)
+2. extract `facts/procedures` (regex rules; LLM hook optional via `AI_MEMORY_LLM`):
+   - facts: attribute/remember/decided/fixed patterns
+   - procedures: up to 6 per episode (v0.9.0) — runbooks, newline-numbered
+     lists, `(1)`-style parenthetical session-wraps (`(part N)` triggers),
+     first/then chains, how-tos, fix-X-with-Y, gotcha→action, follow-ups,
+     command/shell sequences; deduped by trigger+steps head, capped.
 3. merge: same `(entity,key)` + same value → reinforce confidence in place; same `(entity,key)` + new value → old fact marked `superseded`, new fact inserted as `active` (fact invalidation on correction)
-4. mark processed, decay: `importance *= 0.99` per run if never recalled
+4. semantic conflict policy (v0.9.1, write path in `store.py`):
+   - same key superseded → old row's `facts_fts` + `vec_facts` slots dropped
+     immediately (no dead candidates in the recall budget)
+   - cross-key collision: nearest active fact (same entity+ns, different key)
+     via `vec_facts` search. sim ≥ 0.88 AND new confidence ≥ old − 0.10 →
+     auto-supersede (new wins, old kept as superseded audit row). No vec or
+     weaker confidence → both stay active; sim ≥ 0.85 pairs are reported by
+     `doctor facts` for human verdict (`supersede` CLI/MCP tool).
+5. procedures: near-duplicate semantically (sim ≥ 0.90) → merge into existing
+   row (steps refreshed, `uses += 1`), exact-trigger match unconditionally
+6. mark processed, decay: `importance *= 0.99` per run if never recalled
 
-**Forgetting:** explicit `memory_forget(id|query)` always wins. Plus passive decay + `consolidate --vacuum` drops `importance<0.05 and age>90d`.
+**Forgetting:** explicit `memory_forget(id|query)` always wins. Plus passive
+decay + `consolidate --vacuum` drops `importance<0.05 and age>90d`.
+`backfill-vecs` fills vector slots for active rows only and evicts slots of
+superseded ones (never resurrects dead candidates). Superseded fact rows stay
+in the table as audit trail, invisible to recall (`_fetch` filters
+`status='active'`).
+
+## 7b. Facts Doctor (read-only audit, T1.1)
+
+`doctor.fact_audit` never mutates. Reports:
+- `conflicts`: cross-key near-duplicate pairs (sim ≥ threshold, default 0.85)
+- `same_key_dupes`: invariant breaks (two actives for one key)
+- `dead_fts_slots` / `dead_vec_slots`: index entries whose base row is gone or
+  not active (ghost rows included)
+- `missing_vec_rows`: active rows lacking vectors (fix via `backfill-vecs`)
+
+Verdict tool: `sdk.supersede_fact(old, new)` / CLI `ai-memory supersede
+--old X --new Y` / MCP `memory_supersede`. Trainer-visible thresholds live in
+`store.py` (`SEMANTIC_SUPERSEDE_SIM`, `SEMANTIC_CONF_WINDOW`, `PROC_MERGE_SIM`).
 
 ## 8. Pluggability (MCP-first)
 
